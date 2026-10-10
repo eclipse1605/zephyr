@@ -1,0 +1,39 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "w-core",
+        "name": "moscow core",
+        "population": 100000,
+        "source": "Census estimate",
+        "year": 2011
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          37.6173,
+          55.7558
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "w-outer",
+        "name": "moscow outer uncovered",
+        "population": 40000,
+        "source": "Census estimate",
+        "year": 2011
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          39.6173,
+          57.7558
+        ]
+      }
+    }
+  ]
+}

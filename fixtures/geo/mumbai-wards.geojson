@@ -1,0 +1,39 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "w-core",
+        "name": "mumbai core",
+        "population": 100000,
+        "source": "Census estimate",
+        "year": 2011
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          72.8777,
+          19.076
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "w-outer",
+        "name": "mumbai outer uncovered",
+        "population": 40000,
+        "source": "Census estimate",
+        "year": 2011
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          74.8777,
+          21.076
+        ]
+      }
+    }
+  ]
+}

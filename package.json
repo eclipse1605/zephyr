@@ -1,0 +1,16 @@
+{
+  "name": "zephyr",
+  "private": true,
+  "packageManager": "pnpm@10.34.5",
+  "scripts": {
+    "build": "pnpm -r run build",
+    "test": "pnpm --filter @zephyr/domain test",
+    "dev:api": "pnpm --filter @zephyr/api dev",
+    "dev:worker": "pnpm --filter @zephyr/worker dev",
+    "dev:web": "pnpm --filter @zephyr/web dev",
+    "typecheck": "pnpm -r run typecheck"
+  },
+  "engines": {
+    "node": ">=22.18"
+  }
+}

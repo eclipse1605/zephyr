@@ -1,0 +1,5 @@
+project_id      = "your-gcp-project"
+region          = "asia-south1"
+operator_emails = "operator@example.com"
+api_image       = "asia-south1-docker.pkg.dev/your-gcp-project/zephyr/api:latest"
+worker_image    = "asia-south1-docker.pkg.dev/your-gcp-project/zephyr/worker:latest"

@@ -1,0 +1,39 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "w-core",
+        "name": "beijing core",
+        "population": 100000,
+        "source": "Census estimate",
+        "year": 2011
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          116.4074,
+          39.9042
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "w-outer",
+        "name": "beijing outer uncovered",
+        "population": 40000,
+        "source": "Census estimate",
+        "year": 2011
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          118.4074,
+          41.9042
+        ]
+      }
+    }
+  ]
+}

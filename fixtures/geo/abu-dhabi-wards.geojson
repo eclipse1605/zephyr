@@ -1,0 +1,39 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "w-core",
+        "name": "abu-dhabi core",
+        "population": 100000,
+        "source": "Census estimate",
+        "year": 2011
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          54.3773,
+          24.4539
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "w-outer",
+        "name": "abu-dhabi outer uncovered",
+        "population": 40000,
+        "source": "Census estimate",
+        "year": 2011
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          56.3773,
+          26.4539
+        ]
+      }
+    }
+  ]
+}

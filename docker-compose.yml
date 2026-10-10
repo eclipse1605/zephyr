@@ -1,0 +1,56 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env.local
+      - .env
+    environment:
+      PORT: "8080"
+      ZEPHYR_DATA_DIR: /data
+      ZEPHYR_FIXTURES: /fixtures
+      WORKER_URL: http://worker:8081
+    volumes:
+      - zephyr-data:/data
+      - ./fixtures:/fixtures:ro
+    depends_on:
+      - worker
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    ports:
+      - "8081:8081"
+    env_file:
+      - .env.local
+      - .env
+    environment:
+      PORT: "8081"
+      ZEPHYR_DATA_DIR: /data
+      ZEPHYR_FIXTURES: /fixtures
+    volumes:
+      - zephyr-data:/data
+      - ./fixtures:/fixtures:ro
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    ports:
+      - "5173:80"
+    depends_on:
+      - api
+
+  # Pub/Sub emulator for local async (optional; file-queue works without it)
+  pubsub:
+    image: gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators
+    command: gcloud beta emulators pubsub start --host-port=0.0.0.0:8085
+    ports:
+      - "8085:8085"
+
+volumes:
+  zephyr-data:

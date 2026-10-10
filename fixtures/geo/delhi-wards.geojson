@@ -1,0 +1,73 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "w-rk",
+        "name": "R.K. Puram",
+        "population": 120000,
+        "source": "Census estimate",
+        "year": 2011
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.186,
+          28.563
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "w-anand",
+        "name": "Anand Vihar",
+        "population": 95000,
+        "source": "Census estimate",
+        "year": 2011
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.316,
+          28.6469
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "w-ito",
+        "name": "ITO",
+        "population": 80000,
+        "source": "Census estimate",
+        "year": 2011
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          77.241,
+          28.628
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "id": "w-far",
+        "name": "Peripheral uncovered",
+        "population": 50000,
+        "source": "Census estimate",
+        "year": 2011
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          78.5,
+          29.4
+        ]
+      }
+    }
+  ]
+}

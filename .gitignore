@@ -1,0 +1,16 @@
+node_modules/
+.data/
+dist/
+.next/
+.env
+.env.local
+*.log
+.DS_Store
+coverage/
+.terraform/
+*.tfstate
+*.tfstate.*
+.tfvars
+credentials/
+*-firebase-adminsdk-*.json
+*-service-account*.json

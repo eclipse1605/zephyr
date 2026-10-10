@@ -1,0 +1,9 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Browsers read nothing operational. All writes go through the API Admin SDK.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -162,6 +162,8 @@ const EN = {
   forecastArima: "ARIMA+",
   forecastSample: "{hour}: {value} µg/m³",
   subscribedLine: "Subscribed to alerts for this area.",
+  themeDark: "Dark mode",
+  themeLight: "Light mode",
 } as const;
 
 type Key = keyof typeof EN;
@@ -330,6 +332,8 @@ const HI: Record<Key, string> = {
   forecastArima: "ARIMA+",
   forecastSample: "{hour}: {value} µg/m³",
   subscribedLine: "इस इलाके के अलर्ट की सदस्यता हो गई।",
+  themeDark: "डार्क मोड",
+  themeLight: "लाइट मोड",
 };
 
 const MR: Record<Key, string> = {
@@ -496,6 +500,8 @@ const MR: Record<Key, string> = {
   forecastArima: "ARIMA+",
   forecastSample: "{hour}: {value} µg/m³",
   subscribedLine: "या परिसराच्या सूचनांची सदस्यता झाली.",
+  themeDark: "गडद मोड",
+  themeLight: "प्रकाश मोड",
 };
 
 const BN: Record<Key, string> = {
@@ -662,6 +668,8 @@ const BN: Record<Key, string> = {
   forecastArima: "ARIMA+",
   forecastSample: "{hour}: {value} µg/m³",
   subscribedLine: "এই এলাকার সতর্কতায় সাবস্ক্রাইব হয়েছে।",
+  themeDark: "ডার্ক মোড",
+  themeLight: "লাইট মোড",
 };
 
 const TA: Record<Key, string> = {
@@ -828,6 +836,8 @@ const TA: Record<Key, string> = {
   forecastArima: "ARIMA+",
   forecastSample: "{hour}: {value} µg/m³",
   subscribedLine: "இந்த பகுதியின் எச்சரிக்கைகளுக்கு சந்தா ஆனது.",
+  themeDark: "இருண்ட பயன்முறை",
+  themeLight: "ஒளி பயன்முறை",
 };
 
 const KN: Record<Key, string> = {
@@ -994,6 +1004,8 @@ const KN: Record<Key, string> = {
   forecastArima: "ARIMA+",
   forecastSample: "{hour}: {value} µg/m³",
   subscribedLine: "ಈ ಪ್ರದೇಶದ ಎಚ್ಚರಿಕೆಗಳಿಗೆ ಚಂದಾ ಆಯಿತು.",
+  themeDark: "ಡಾರ್ಕ್ ಮೋಡ್",
+  themeLight: "ಲೈಟ್ ಮೋಡ್",
 };
 
 const TE: Record<Key, string> = {
@@ -1160,6 +1172,8 @@ const TE: Record<Key, string> = {
   forecastArima: "ARIMA+",
   forecastSample: "{hour}: {value} µg/m³",
   subscribedLine: "ఈ ప్రాంతం హెచ్చరికలకు సభ్యత్వం అయింది.",
+  themeDark: "డార్క్ మోడ్",
+  themeLight: "లైట్ మోడ్",
 };
 
 const ZH: Record<Key, string> = {
@@ -1326,6 +1340,8 @@ const ZH: Record<Key, string> = {
   forecastArima: "ARIMA+",
   forecastSample: "{hour}: {value} µg/m³",
   subscribedLine: "已订阅此区域的警报。",
+  themeDark: "深色模式",
+  themeLight: "浅色模式",
 };
 
 const RU: Record<Key, string> = {
@@ -1492,6 +1508,8 @@ const RU: Record<Key, string> = {
   forecastArima: "ARIMA+",
   forecastSample: "{hour}: {value} µg/m³",
   subscribedLine: "Подписка на оповещения для этого района оформлена.",
+  themeDark: "Тёмная тема",
+  themeLight: "Светлая тема",
 };
 
 const AR: Record<Key, string> = {
@@ -1658,6 +1676,8 @@ const AR: Record<Key, string> = {
   forecastArima: "ARIMA+",
   forecastSample: "{hour}: {value} µg/m³",
   subscribedLine: "تم الاشتراك في تنبيهات هذه المنطقة.",
+  themeDark: "الوضع الداكن",
+  themeLight: "الوضع الفاتح",
 };
 
 const ID: Record<Key, string> = {
@@ -1824,6 +1844,8 @@ const ID: Record<Key, string> = {
   forecastArima: "ARIMA+",
   forecastSample: "{hour}: {value} µg/m³",
   subscribedLine: "Berlangganan peringatan untuk area ini.",
+  themeDark: "Mode gelap",
+  themeLight: "Mode terang",
 };
 
 const PT: Record<Key, string> = {
@@ -1990,6 +2012,8 @@ const PT: Record<Key, string> = {
   forecastArima: "ARIMA+",
   forecastSample: "{hour}: {value} µg/m³",
   subscribedLine: "Inscrito nos alertas desta área.",
+  themeDark: "Modo escuro",
+  themeLight: "Modo claro",
 };
 
 const STRINGS: Record<string, Record<Key, string>> = {

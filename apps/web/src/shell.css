@@ -36,7 +36,7 @@
   overflow: auto;
   border: 1px solid var(--line);
   border-radius: 12px;
-  background: #fff;
+  background: var(--surface);
   box-shadow: var(--shadow);
 }
 
@@ -80,6 +80,11 @@
   white-space: nowrap;
 }
 
+.theme-toggle {
+  width: 44px;
+  padding-inline: 0;
+}
+
 .operator-login {
   display: flex;
   flex-wrap: wrap;
@@ -89,7 +94,7 @@
   padding: 12px 16px;
   border: 1px solid var(--line);
   border-radius: 14px;
-  background: #fff;
+  background: var(--surface);
 }
 
 .operator-login label {

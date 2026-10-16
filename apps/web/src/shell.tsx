@@ -1,7 +1,8 @@
 import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { NavLink, useLocation } from "react-router-dom";
+import { Link, NavLink, useLocation } from "react-router-dom";
 import { LANGUAGES, t } from "./i18n";
 import { LangContext } from "./lang";
+import { Logo } from "./logo";
 import type { Auth, City } from "./api";
 import "./shell.css";
 
@@ -14,6 +15,39 @@ function pageKey(pathname: string): "home" | "map" | "report" | "diary" | "opera
   if (pathname.startsWith("/operator")) return "operator";
   if (pathname.startsWith("/pipeline")) return "pipeline";
   return "home";
+}
+
+function ThemeIcon({ theme }: { theme: "light" | "dark" }) {
+  if (theme === "dark") {
+    return (
+      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+        <circle cx="9" cy="9" r="3" fill="none" stroke="currentColor" strokeWidth="1.6" />
+        <path d="M9 2.2v1.6M9 14.2v1.6M2.2 9h1.6M14.2 9h1.6M4.2 4.2l1.1 1.1M12.7 12.7l1.1 1.1M13.8 4.2l-1.1 1.1M5.3 12.7l-1.1 1.1" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      </svg>
+    );
+  }
+  return (
+    <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+      <path d="M10.2 2.2a6.4 6.4 0 1 0 5.6 9.4A5.4 5.4 0 0 1 10.2 2.2Z" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function ThemeToggle({ lang }: { lang: string }) {
+  const [theme, setTheme] = useState<"light" | "dark">(() =>
+    document.documentElement.dataset.theme === "dark" ? "dark" : "light",
+  );
+  const toggle = () => {
+    const next = theme === "dark" ? "light" : "dark";
+    document.documentElement.dataset.theme = next;
+    localStorage.setItem("zephyr.theme", next);
+    setTheme(next);
+  };
+  return (
+    <button type="button" className="theme-toggle" aria-label={t(lang, theme === "dark" ? "themeLight" : "themeDark")} onClick={toggle}>
+      <ThemeIcon theme={theme} />
+    </button>
+  );
 }
 
 function LangMenu({ lang, setLang }: { lang: string; setLang: (id: string) => void }) {
@@ -104,10 +138,10 @@ export function Shell({
   return (
     <div className="shell" lang={lang} dir={lang === "ar" ? "rtl" : "ltr"}>
       <nav className="nav" aria-label={t(lang, "navPrimary")}>
-        <div className="brand">
-          <span className="brand-mark" aria-hidden="true">Z</span>
+        <Link className="brand" to="/">
+          <Logo />
           <span className="brand-name">Zephyr</span>
-        </div>
+        </Link>
         <div className="links">
           <NavLink to="/" end>
             {t(lang, "home")}
@@ -134,6 +168,7 @@ export function Shell({
             </select>
           </label>
           <LangMenu lang={lang} setLang={setLang} />
+          <ThemeToggle lang={lang} />
           {auth ? (
             <>
               <span className="muted">{auth.email}</span>

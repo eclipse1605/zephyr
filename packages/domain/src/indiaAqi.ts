@@ -75,6 +75,23 @@ export const POLLUTANT_LABELS: Record<AqiPollutant, string> = {
 
 export const AQI_MAX = 500;
 export const POOR_THRESHOLD = 201;
+/** US EPA "Unhealthy" starts here. India's Poor band starts at 201. */
+export const US_UNHEALTHY_THRESHOLD = 151;
+
+export function unhealthyThreshold(scale: "india" | "us"): number {
+  return scale === "us" ? US_UNHEALTHY_THRESHOLD : POOR_THRESHOLD;
+}
+
+/** Map a US AQI onto the advisory bands. Names stay the India set the UI already prints. */
+export function bandForScale(aqi: number, scale: "india" | "us"): AqiBand {
+  if (scale === "india") return aqiBand(aqi);
+  if (aqi <= 50) return "Good";
+  if (aqi <= 100) return "Satisfactory";
+  if (aqi <= 150) return "Moderate";
+  if (aqi <= 200) return "Poor";
+  if (aqi <= 300) return "Very Poor";
+  return "Severe";
+}
 
 export function aqiBand(aqi: number): AqiBand {
   if (aqi <= 50) return "Good";

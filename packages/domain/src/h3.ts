@@ -1,4 +1,4 @@
-import { latLngToCell, cellToLatLng, gridDisk } from "h3-js";
+import { latLngToCell, cellToLatLng, gridDisk, isValidCell } from "h3-js";
 import type { LatLng } from "./types.js";
 
 /** Neighbourhood hex resolution (~0.7 km²). */
@@ -9,6 +9,7 @@ export function latLngToH3(point: LatLng, resolution = H3_RESOLUTION): string {
 }
 
 export function h3ToLatLng(h3: string): LatLng {
+  if (!isValidCell(h3)) throw new Error("bad_h3");
   const [lat, lng] = cellToLatLng(h3);
   return { lat, lng };
 }

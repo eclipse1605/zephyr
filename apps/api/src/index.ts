@@ -20,9 +20,11 @@ import {
   isOverdue,
   isRepeatHotspot,
   haversineKm,
+  exposureGaps,
+  verifyTwilioSignature,
+  h3ToLatLng,
 } from "@zephyr/domain";
 import {
-  FileStore,
   hashIp,
   newId,
   newToken,
@@ -32,6 +34,11 @@ import {
   runTick,
   generateZoneBrief,
   runCopilot,
+  arimaForecast,
+  fetchModelledPm25,
+  publishReport,
+  openStore,
+  forecastTrainingStatus,
 } from "@zephyr/server";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -41,7 +48,7 @@ const FIXTURES = process.env.ZEPHYR_FIXTURES ?? path.join(ROOT, "fixtures");
 const WORKER_URL = process.env.WORKER_URL ?? "http://127.0.0.1:8081";
 const PORT = Number(process.env.PORT ?? 8080);
 
-const store = new FileStore(DATA);
+const store = await openStore(DATA);
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 const app = express();
 app.use(cors());
@@ -62,22 +69,29 @@ function operatorEmails(): Set<string> {
   );
 }
 
-function authUser(req: express.Request): { uid: string; email: string; operator: boolean } | null {
+async function authUser(req: express.Request): Promise<{ uid: string; email: string; operator: boolean } | null> {
   const header = req.header("authorization") ?? "";
   const m = header.match(/^Bearer\s+(.+)$/i);
   if (!m) return null;
-  // Dev auth: Bearer demo:<email> or Bearer operator:<email>
-  // Operator privilege comes from OPERATOR_EMAILS.
   const token = m[1]!;
-  if (token.startsWith("demo:") || token.startsWith("operator:")) {
+  if (process.env.ZEPHYR_DEV_AUTH === "1" && (token.startsWith("demo:") || token.startsWith("operator:"))) {
     const email = token.slice(token.indexOf(":") + 1).toLowerCase();
     return { uid: sha256(email).slice(0, 16), email, operator: operatorEmails().has(email) };
   }
-  return null;
+  try {
+    const res = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(token)}`);
+    if (!res.ok) return null;
+    const info = (await res.json()) as { sub?: string; email?: string };
+    if (!info.email || !info.sub) return null;
+    const email = info.email.toLowerCase();
+    return { uid: info.sub, email, operator: operatorEmails().has(email) };
+  } catch {
+    return null;
+  }
 }
 
-function requireUser(req: express.Request, res: express.Response): { uid: string; email: string; operator: boolean } | null {
-  const u = authUser(req);
+async function requireUser(req: express.Request, res: express.Response): Promise<{ uid: string; email: string; operator: boolean } | null> {
+  const u = await authUser(req);
   if (!u) {
     res.status(401).json({ error: "unauthorized" });
     return null;
@@ -85,8 +99,8 @@ function requireUser(req: express.Request, res: express.Response): { uid: string
   return u;
 }
 
-function requireOperator(req: express.Request, res: express.Response) {
-  const u = requireUser(req, res);
+async function requireOperator(req: express.Request, res: express.Response) {
+  const u = await requireUser(req, res);
   if (!u) return null;
   if (!u.operator && !operatorEmails().has(u.email)) {
     res.status(403).json({ error: "operator_required" });
@@ -116,6 +130,7 @@ async function enqueueReport(reportId: string) {
   await store.update((db) => {
     db.pendingMessages.push({ id: newId(), type: "report.submitted", body: { reportId } });
   });
+  await publishReport(reportId).catch(() => false);
   try {
     await fetch(`${WORKER_URL}/internal/pubsub/reports`, {
       method: "POST",
@@ -147,6 +162,14 @@ v1.get("/health", async (_req, res) => {
       firebase: Boolean(process.env.FIREBASE_SERVICE_ACCOUNT_KEY?.trim()),
     },
     ingest: db.ingest,
+    forecastTraining: forecastTrainingStatus(
+      Math.max(0, ...Object.values(
+        db.hourly.reduce<Record<string, number>>((counts, row) => {
+          counts[row.stationId] = (counts[row.stationId] ?? 0) + 1;
+          return counts;
+        }, {}),
+      )),
+    ),
   });
 });
 
@@ -188,53 +211,83 @@ v1.get("/cities/:cityId/wards", async (req, res) => {
 v1.get("/zones/:h3", async (req, res) => {
   const db = await store.read();
   const h3 = param(req.params.h3);
+  let center: { lat: number; lng: number };
+  try {
+    center = h3ToLatLng(h3);
+  } catch {
+    return res.status(400).json({ error: "bad_h3" });
+  }
+  const city = CITIES.find((c) => pointInBounds(center, c.bounds));
+  const cityId = (req.query.cityId as string) || city?.id || "delhi";
+  const stations = Object.values(db.stations).filter((s) => s.cityId === cityId && s.online && s.aqi != null);
+  let nearest = null as (typeof stations)[number] | null;
+  let distanceKm: number | null = null;
+  for (const s of stations) {
+    const km = haversineKm(center, { lat: s.lat, lng: s.lng });
+    if (nearest == null || km < (distanceKm ?? Infinity)) {
+      nearest = s;
+      distanceKm = km;
+    }
+  }
   const incidents = Object.values(db.incidents).filter(
     (i) => i.h3 === h3 && ["open", "dispatched", "disputed"].includes(i.status),
   );
   const reports = Object.values(db.reports).filter((r) => r.h3 === h3);
-  // nearest station globally by any city — prefer same city if report exists
-  const cityId = reports[0]?.cityId ?? incidents[0]?.cityId ?? "delhi";
-  const stations = Object.values(db.stations).filter((s) => s.cityId === cityId && s.online && s.aqi != null);
-  let nearest = null as (typeof stations)[number] | null;
-  let distanceKm: number | null = null;
-  // use first station as approximate if we lack hex center join — use report lat if any
-  const anchor = reports[0] ? { lat: reports[0].lat, lng: reports[0].lng } : stations[0] ? { lat: stations[0].lat, lng: stations[0].lng } : null;
-  if (anchor) {
-    for (const s of stations) {
-      const km = haversineKm(anchor, { lat: s.lat, lng: s.lng });
-      if (nearest == null || km < (distanceKm ?? Infinity)) {
-        nearest = s;
-        distanceKm = km;
-      }
-    }
-  }
-  const advisory = nearest?.aqi != null ? groupAdvisoryForAqi(nearest.aqi) : null;
-  res.json({ h3, cityId, nearestStation: nearest, distanceKm, advisory, incidents, openReports: reports.length });
+  const scale = getCity(cityId)?.aqiScale ?? "india";
+  const advisory = nearest?.aqi != null ? groupAdvisoryForAqi(nearest.aqi, scale) : null;
+  res.json({ h3, cityId, center, nearestStation: nearest, distanceKm, advisory, incidents, openReports: reports.length });
 });
 
 v1.get("/zones/:h3/forecast", async (req, res) => {
   const db = await store.read();
   const cityId = (req.query.cityId as string) || "delhi";
+  let center: { lat: number; lng: number } | null = null;
+  try {
+    center = h3ToLatLng(param(req.params.h3));
+  } catch {
+    center = null;
+  }
   const stations = Object.values(db.stations).filter((s) => s.cityId === cityId && s.online);
-  const station = stations[0];
+  let station = stations[0];
+  if (center && stations.length) {
+    let best = Infinity;
+    for (const s of stations) {
+      const km = haversineKm(center, { lat: s.lat, lng: s.lng });
+      if (km < best) {
+        best = km;
+        station = s;
+      }
+    }
+  }
   if (!station) return res.status(404).json({ error: "no_station" });
   const history = db.hourly
     .filter((h) => h.stationId === station.id && h.pm25 != null)
     .map((h) => ({ observedAt: h.observedAt, pm25: h.pm25! }))
     .sort((a, b) => Date.parse(a.observedAt) - Date.parse(b.observedAt));
   const persistence = persistenceForecast(station.id, history);
-  const modelled =
-    "error" in persistence
-      ? {
-          method: "modelled" as const,
-          stationId: station.id,
-          hours: history.slice(-24).map((h, i) => ({
-            at: new Date(Date.now() + (i + 1) * 3600_000).toISOString(),
-            pm25: h.pm25,
-          })),
-        }
-      : null;
-  res.json({ persistence, modelled, arima: null });
+  let modelled: { method: "modelled"; stationId: string; hours: Array<{ at: string; pm25: number }> } | null = null;
+  if ("error" in persistence) {
+    let hours = db.modelledHistory.filter((h) => h.stationId === station.id);
+    if (hours.length === 0) {
+      const fetched = await fetchModelledPm25(station.lat, station.lng);
+      hours = fetched.map((h) => ({ stationId: station.id, at: h.at, pm25: h.pm25 }));
+      if (hours.length) {
+        db.modelledHistory.push(...hours);
+        await store.write(db);
+      }
+    }
+    modelled = {
+      method: "modelled",
+      stationId: station.id,
+      hours: hours.map((h) => ({ at: h.at, pm25: h.pm25 })),
+    };
+  }
+  const arimaHours = await arimaForecast(station.id, history);
+  res.json({
+    persistence,
+    modelled,
+    arima: arimaHours ? { method: "arima_plus", stationId: station.id, hours: arimaHours } : null,
+  });
 });
 
 v1.get("/zones/:h3/brief", async (req, res) => {
@@ -257,8 +310,39 @@ v1.get("/zones/:h3/health", async (req, res) => {
     ? Object.values(db.stations).find((s) => s.id === incident.stationId)
     : null;
   const advisory = station?.aqi != null ? groupAdvisoryForAqi(station.aqi) : null;
+  const placesKey = process.env.GOOGLE_PLACES_API_KEY?.trim();
+  let sensitiveSites: Array<{ name: string; kind: string }> = [];
+  if (placesKey && incident) {
+    const station = Object.values(db.stations).find((s) => s.id === incident.stationId);
+    if (station) {
+      const url = "https://places.googleapis.com/v1/places:searchNearby";
+      const resPlaces = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Goog-Api-Key": placesKey,
+          "X-Goog-FieldMask": "places.displayName,places.primaryType",
+        },
+        body: JSON.stringify({
+          includedTypes: ["school", "hospital"],
+          maxResultCount: 8,
+          locationRestriction: {
+            circle: { center: { latitude: station.lat, longitude: station.lng }, radius: 1000 },
+          },
+        }),
+      }).catch(() => null);
+      if (resPlaces?.ok) {
+        const body = (await resPlaces.json()) as { places?: Array<{ displayName?: { text?: string }; primaryType?: string }> };
+        sensitiveSites = (body.places ?? []).map((p) => ({
+          name: p.displayName?.text ?? "site",
+          kind: p.primaryType ?? "place",
+        }));
+      }
+    }
+  }
   res.json({
     advisory,
+    sensitiveSites,
     googleHealthAdvice: process.env.GOOGLE_AIR_QUALITY_API_KEY
       ? { configured: true, text: "See Google Air Quality API for sensitive-group advice." }
       : { configured: false, text: null },
@@ -282,7 +366,7 @@ v1.post("/reports", async (req, res) => {
   db.rateLimits[bucket] = rl;
 
   const id = typeof req.body.reportId === "string" ? req.body.reportId : newId();
-  const user = authUser(req);
+  const user = await authUser(req);
   const token = newToken();
   db.reports[id] = {
     id,
@@ -377,14 +461,14 @@ v1.post("/reports/:id/closure", async (req, res) => {
   res.json(result);
 });
 
-v1.get("/me", (req, res) => {
-  const u = requireUser(req, res);
+v1.get("/me", async (req, res) => {
+  const u = await requireUser(req, res);
   if (!u) return;
   res.json(u);
 });
 
 v1.get("/me/diary", async (req, res) => {
-  const u = requireUser(req, res);
+  const u = await requireUser(req, res);
   if (!u) return;
   const db = await store.read();
   const diary = db.diaries[u.uid] ?? null;
@@ -394,11 +478,12 @@ v1.get("/me/diary", async (req, res) => {
     if (!s.band) continue;
     hoursByBand[s.band] = (hoursByBand[s.band] ?? 0) + 0.5;
   }
-  res.json({ diary, snapshots: snaps, hoursByBand });
+  const gaps = exposureGaps(snaps);
+  res.json({ diary, snapshots: snaps, hoursByBand, gaps });
 });
 
 v1.put("/me/diary", async (req, res) => {
-  const u = requireUser(req, res);
+  const u = await requireUser(req, res);
   if (!u) return;
   const { cityId, lat, lng } = req.body ?? {};
   const city = getCity(cityId);
@@ -418,7 +503,7 @@ v1.put("/me/diary", async (req, res) => {
 });
 
 v1.get("/me/subscriptions", async (req, res) => {
-  const u = requireUser(req, res);
+  const u = await requireUser(req, res);
   if (!u) return;
   const db = await store.read();
   res.json({
@@ -428,7 +513,7 @@ v1.get("/me/subscriptions", async (req, res) => {
 });
 
 v1.post("/me/subscriptions", async (req, res) => {
-  const u = requireUser(req, res);
+  const u = await requireUser(req, res);
   if (!u) return;
   const { h3, cityId, channels } = req.body ?? {};
   if (!h3 || !cityId) return res.status(400).json({ error: "bad_request" });
@@ -447,7 +532,7 @@ v1.post("/me/subscriptions", async (req, res) => {
 });
 
 v1.delete("/me/subscriptions/:h3", async (req, res) => {
-  const u = requireUser(req, res);
+  const u = await requireUser(req, res);
   if (!u) return;
   await store.update((db) => {
     delete db.subscriptions[`${u.uid}_${param(req.params.h3)}`];
@@ -456,7 +541,7 @@ v1.delete("/me/subscriptions/:h3", async (req, res) => {
 });
 
 v1.post("/api-keys", async (req, res) => {
-  const u = requireUser(req, res);
+  const u = await requireUser(req, res);
   if (!u) return;
   const raw = `zph_${newToken().raw}`;
   const hash = sha256(raw);
@@ -472,7 +557,7 @@ v1.post("/api-keys", async (req, res) => {
 });
 
 v1.get("/operator/incidents", async (req, res) => {
-  if (!requireOperator(req, res)) return;
+  if (!await requireOperator(req, res)) return;
   const db = await store.read();
   const items = Object.values(db.incidents)
     .filter((i) => ["open", "dispatched", "disputed"].includes(i.status))
@@ -488,7 +573,7 @@ v1.get("/operator/incidents", async (req, res) => {
 });
 
 v1.post("/operator/incidents/:id/:action", async (req, res) => {
-  const u = requireOperator(req, res);
+  const u = await requireOperator(req, res);
   if (!u) return;
   const action = param(req.params.action) as "dispatch" | "resolve" | "false-positive";
   const mapped = action === "false-positive" ? "false_positive" : action;
@@ -500,20 +585,70 @@ v1.post("/operator/incidents/:id/:action", async (req, res) => {
 });
 
 v1.post("/operator/copilot", async (req, res) => {
-  if (!requireOperator(req, res)) return;
-  const tools = ["incidents", "stations", "wind", "fires", "forecasts", "upwind"];
-  const result = await runCopilot(String(req.body?.question ?? ""), tools);
+  if (!await requireOperator(req, res)) return;
+  const result = await runCopilot(String(req.body?.question ?? ""), {
+    incidents: async (args) => {
+      const db = await store.read();
+      return Object.values(db.incidents)
+        .filter((i) => !args?.cityId || i.cityId === args.cityId)
+        .filter((i) => !args?.h3 || i.h3 === args.h3)
+        .slice(0, 12)
+        .map((i) => ({ id: i.id, status: i.status, h3: i.h3, cityId: i.cityId, reason: i.reason }));
+    },
+    stations: async (args) => {
+      const db = await store.read();
+      return Object.values(db.stations)
+        .filter((s) => !args?.cityId || s.cityId === args.cityId)
+        .slice(0, 12)
+        .map((s) => ({ name: s.name, aqi: s.aqi, cityId: s.cityId, lat: s.lat, lng: s.lng }));
+    },
+    fires: async (args) => {
+      const db = await store.read();
+      return db.fires.filter((f) => !args?.cityId || f.cityId === args.cityId).slice(0, 12);
+    },
+    forecasts: async (args) => {
+      const db = await store.read();
+      return Object.values(db.citySummaries)
+        .filter((c) => !args?.cityId || c.cityId === args.cityId)
+        .map((c) => ({ cityId: c.cityId, aqi: c.cityAqi }));
+    },
+    upwind: async (args) => {
+      const db = await store.read();
+      return Object.values(db.incidents)
+        .filter((i) => !args?.cityId || i.cityId === args.cityId)
+        .filter((i) => !args?.h3 || i.h3 === args.h3)
+        .flatMap((i) => i.upwind ?? [])
+        .slice(0, 12);
+    },
+    wind: async () => ({ source: "open-meteo", note: "direction is attached on each incident upwind list" }),
+  });
   res.json(result);
 });
 
+v1.get("/cities/:cityId/fires", async (req, res) => {
+  const db = await store.read();
+  res.json({ fires: db.fires.filter((f) => f.cityId === param(req.params.cityId)) });
+});
+
+v1.post("/reports/:id/voice", upload.single("voice"), async (req, res) => {
+  const id = param(req.params.id);
+  const db = await store.read();
+  if (!db.reports[id]) return res.status(404).json({ error: "not_found" });
+  if (!req.file) return res.status(400).json({ error: "voice_required" });
+  const p = await store.savePhoto(`${id}-voice`, req.file.buffer);
+  db.reports[id]!.voicePath = p;
+  await store.write(db);
+  res.json({ ok: true });
+});
+
 v1.get("/operator/dlq", async (req, res) => {
-  if (!requireOperator(req, res)) return;
+  if (!await requireOperator(req, res)) return;
   const db = await store.read();
   res.json({ items: Object.values(db.dlqItems) });
 });
 
 v1.post("/operator/dlq/:id/replay", async (req, res) => {
-  if (!requireOperator(req, res)) return;
+  if (!await requireOperator(req, res)) return;
   const db = await store.read();
   const item = db.dlqItems[param(req.params.id)];
   if (!item) return res.status(404).json({ error: "not_found" });
@@ -531,7 +666,7 @@ v1.post("/operator/dlq/:id/replay", async (req, res) => {
 });
 
 v1.post("/system/data-mode", async (req, res) => {
-  if (!requireOperator(req, res)) return;
+  if (!await requireOperator(req, res)) return;
   const mode = req.body?.dataMode;
   if (mode !== "live" && mode !== "demo") return res.status(400).json({ error: "bad_mode" });
   await store.update((db) => {
@@ -541,7 +676,7 @@ v1.post("/system/data-mode", async (req, res) => {
 });
 
 v1.post("/system/tick", async (req, res) => {
-  if (!requireOperator(req, res)) return;
+  if (!await requireOperator(req, res)) return;
   try {
     await fetch(`${WORKER_URL}/internal/tick`, { method: "POST" });
   } catch {
@@ -553,7 +688,10 @@ v1.post("/system/tick", async (req, res) => {
 
 v1.post("/whatsapp/inbound", async (req, res) => {
   const signature = req.header("x-twilio-signature");
-  if (process.env.TWILIO_AUTH_TOKEN && !signature) {
+  const authToken = process.env.TWILIO_AUTH_TOKEN?.trim() ?? "";
+  const params = Object.fromEntries(Object.entries(req.body ?? {}).map(([k, v]) => [k, String(v)]));
+  const url = `${req.protocol}://${req.get("host")}${req.originalUrl}`;
+  if (authToken && !verifyTwilioSignature(url, params, authToken, signature)) {
     return res.status(403).json({ error: "bad_signature" });
   }
   const body = req.body ?? {};
@@ -562,15 +700,13 @@ v1.post("/whatsapp/inbound", async (req, res) => {
   const db = await store.read();
 
   if (text === "FIXED" || text === "STILL") {
-    const secret = process.env.WHATSAPP_CLOSURE_SECRET;
+    const secret = process.env.WHATSAPP_CLOSURE_SECRET?.trim();
     if (!secret) return res.status(400).send("closure not configured");
-    // Find latest resolved report contact matching phone — simplified: match note/phone in contacts n/a
     const openClosure = Object.values(db.incidents).find((i) => i.closure?.open);
     if (!openClosure) return res.status(200).send("<Response></Response>");
     const report = db.reports[openClosure.reportIds[0] ?? ""];
     if (!report?.closureTokenHash) return res.status(200).send("<Response></Response>");
-    // WhatsApp path uses shared secret as token substitute when configured
-    const tokenValid = sha256(`${secret}:${from}`) === report.closureTokenHash || true;
+    const tokenValid = sha256(`${secret}:${from}`) === report.closureTokenHash;
     const result = applyClosureAnswer({
       closure: openClosure.closure as never,
       answer: text as "FIXED" | "STILL",
@@ -586,15 +722,22 @@ v1.post("/whatsapp/inbound", async (req, res) => {
   }
 
   // New WhatsApp report with media URL would be fetched here; create a text-only report for demo.
-  const city = getCity("delhi")!;
+  const lat = Number(body.Latitude);
+  const lng = Number(body.Longitude);
+  const point = Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null;
+  const city = point ? CITIES.find((c) => pointInBounds(point, c.bounds)) : undefined;
+  if (!city || !point) {
+    return res.type("text/xml").send("<Response><Message>Send a location pin inside a monitored city.</Message></Response>");
+  }
   const id = newId();
+  const secret = process.env.WHATSAPP_CLOSURE_SECRET?.trim();
   const token = newToken();
   db.reports[id] = {
     id,
-    cityId: "delhi",
-    h3: latLngToH3(city.center),
-    lat: city.center.lat,
-    lng: city.center.lng,
+    cityId: city.id,
+    h3: latLngToH3(point),
+    lat: point.lat,
+    lng: point.lng,
     hazardType: "smoke",
     note: String(body.Body ?? "whatsapp report"),
     photoPath: null,
@@ -610,7 +753,7 @@ v1.post("/whatsapp/inbound", async (req, res) => {
     channel: "whatsapp",
     ipHash: hashIp(from || "whatsapp"),
     incidentId: null,
-    closureTokenHash: token.hash,
+    closureTokenHash: secret ? sha256(`${secret}:${from}`) : token.hash,
   };
   await store.write(db);
   await enqueueReport(id);

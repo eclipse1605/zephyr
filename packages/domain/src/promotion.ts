@@ -1,5 +1,5 @@
 import type { AqiScale, CityStandards, PromotionReason } from "./types.js";
-import { POOR_THRESHOLD } from "./indiaAqi.js";
+import { unhealthyThreshold } from "./indiaAqi.js";
 
 export type ReportEvidence = {
   countsTowardPromotion: boolean;
@@ -44,18 +44,18 @@ export function decidePromotion(input: PromotionInput): PromotionDecision {
 
   // Ambient sensor-only path
   const immediate =
-    input.aqiScale === "india"
-      ? input.sensorAqi != null && input.sensorAqi >= POOR_THRESHOLD
-      : input.sensorAqi != null &&
-        input.standards.pm25 > 0 &&
-        // 1.5× national 24h PM2.5 limit expressed via AQI Poor-equivalent for BRICS
-        input.sensorAqi >= POOR_THRESHOLD;
+    input.sensorAqi != null && input.sensorAqi >= unhealthyThreshold(input.aqiScale);
 
   if (immediate || input.consecutiveSensorOverLimit >= 2) {
     return { promote: true, reason: "sensor_only" };
   }
 
   return { promote: false, reason: null };
+}
+
+export function nextSensorStreak(previous: number, overLimit: boolean): number {
+  if (!overLimit) return 0;
+  return Math.max(0, previous) + 1;
 }
 
 export function incidentDedupeKey(h3: string, reason: PromotionReason, dayIso: string): string {

@@ -1,0 +1,190 @@
+.map-legend {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  background: rgba(255, 255, 255, 0.94);
+  color: #101a15;
+  border: 1px solid #e0e4da;
+  border-radius: 12px;
+  box-shadow: 0 8px 20px rgba(16, 26, 21, 0.12);
+  font: 700 12px/1.3 Inter, system-ui, sans-serif;
+}
+
+.map-legend li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.map-legend .legend-note {
+  flex: 1 0 100%;
+  display: block;
+  margin-top: 2px;
+  color: #3f4f48;
+  font-weight: 600;
+}
+
+.swatch {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+}
+
+.swatch-live {
+  width: 28px;
+  height: 12px;
+  border-radius: 999px;
+  border: 1px solid #fff;
+  background: linear-gradient(90deg, #3dd68c, #b6e36a, #ffd666, #f5a524, #ff8a4a, #d64532);
+}
+
+.swatch-offline {
+  width: 28px;
+  height: 12px;
+  border-radius: 999px;
+  background: #d9ddd4;
+  border: 1px solid #8a9388;
+}
+
+.swatch-fire {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: #e07a1f;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px #c96a16;
+}
+
+.swatch-incident {
+  width: 14px;
+  height: 10px;
+  border-radius: 3px;
+  background: #1b2438;
+  border: 1px solid #fff;
+}
+
+.swatch-uncovered {
+  width: 22px;
+  height: 12px;
+  border-radius: 4px;
+  background: #3a2a12;
+  box-shadow: inset 0 0 0 2px #ffd666;
+}
+
+.pin,
+button.pin {
+  min-height: auto;
+  min-width: 0;
+  height: auto;
+  width: auto;
+  padding: 2px 6px;
+  border: 1px solid #fff;
+  font: 600 12px/1.2 Inter, system-ui, sans-serif;
+  cursor: pointer;
+}
+
+button.pin.station,
+.pin.station {
+  color: #081018;
+  border-radius: 999px;
+  padding: 2px 6px;
+  font-weight: 800;
+}
+
+button.pin.station.tone-good,
+button.pin.station.tone-good:hover,
+button.pin.station.tone-good:active,
+.pin.station.tone-good {
+  background: #3dd68c;
+  color: #081018;
+  border-color: #fff;
+}
+
+button.pin.station.tone-sat,
+button.pin.station.tone-sat:hover,
+button.pin.station.tone-sat:active,
+.pin.station.tone-sat {
+  background: #b6e36a;
+  color: #081018;
+  border-color: #fff;
+}
+
+button.pin.station.tone-mod,
+button.pin.station.tone-mod:hover,
+button.pin.station.tone-mod:active,
+.pin.station.tone-mod {
+  background: #ffd666;
+  color: #081018;
+  border-color: #fff;
+}
+
+button.pin.station.tone-poor,
+button.pin.station.tone-poor:hover,
+button.pin.station.tone-poor:active,
+.pin.station.tone-poor {
+  background: #f5a524;
+  color: #081018;
+  border-color: #fff;
+}
+
+button.pin.station.tone-vp,
+button.pin.station.tone-vp:hover,
+button.pin.station.tone-vp:active,
+.pin.station.tone-vp {
+  background: #ff8a4a;
+  color: #081018;
+  border-color: #fff;
+}
+
+button.pin.station.tone-severe,
+button.pin.station.tone-severe:hover,
+button.pin.station.tone-severe:active,
+.pin.station.tone-severe {
+  background: #d64532;
+  color: #fff;
+  border-color: #fff;
+}
+
+button.pin.station.is-offline,
+button.pin.station.is-offline:hover,
+button.pin.station.is-offline:active,
+.pin.station.is-offline {
+  background: #d9ddd4;
+  color: #3f4f48;
+  border: 1px solid #8a9388;
+}
+
+.map-frame .pin.fire {
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  min-height: 14px;
+  padding: 0;
+  border-radius: 999px;
+  background: #e07a1f;
+  border: 2px solid #fff;
+}
+
+.map-frame .pin.uncovered {
+  background: #3a2a12;
+  color: #ffd666;
+  border-radius: 6px;
+  padding: 2px 6px;
+  font-size: 10px;
+  border: 1px solid #fff;
+}
+
+.map-frame button.pin.hex,
+.map-frame button.pin.hex:hover,
+.map-frame button.pin.hex:active,
+.map-frame .pin.hex {
+  background: #1b2438;
+  color: #d5e4ff;
+  border: 1px solid #fff;
+  border-radius: 4px;
+  padding: 2px 5px;
+  font-size: 10px;
+}

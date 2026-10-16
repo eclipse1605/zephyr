@@ -14,3 +14,6 @@ export * from "./advisory.js";
 export * from "./sla.js";
 export * from "./recurrence.js";
 export * from "./cities.js";
+export * from "./feeds.js";
+export * from "./attribution.js";
+export * from "./twilio.js";

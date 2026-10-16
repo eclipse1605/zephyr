@@ -1,0 +1,70 @@
+.report-map {
+  height: 240px;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+}
+
+.report-form {
+  display: grid;
+  gap: 12px;
+  width: 100%;
+}
+
+.report-form > h2 {
+  grid-column: 1 / -1;
+}
+
+.report-map-col,
+.report-fields {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+  min-width: 0;
+}
+
+.report-form label {
+  display: grid;
+  gap: 6px;
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.report-form details summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.report-preview {
+  width: 100%;
+  max-height: 180px;
+  object-fit: cover;
+  border-radius: 12px;
+}
+
+.diary-gate {
+  display: grid;
+  gap: 12px;
+  justify-items: start;
+}
+
+.diary-gate p {
+  margin: 0;
+}
+
+.subscribe-line {
+  margin: 8px 0 0;
+  color: var(--muted);
+}
+
+.method small {
+  display: grid;
+  gap: 2px;
+}
+
+@media (min-width: 800px) {
+  .report-form {
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+    align-items: start;
+  }
+}

@@ -1,6 +1,12 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  parseWaqiStations,
+  parseCpcbRecords,
+  verifyTwilioSignature,
+  twilioSignature,
+  rankUpwind,
+  exposureGaps,
   indiaAqiFromReadings,
   usAqiFromReadings,
   aqiBand,
@@ -160,6 +166,55 @@ describe("promotion", () => {
     assert.equal(d.reason, "citizen_sensor");
   });
 
+  it("does not promote sensor-only on a single over-limit reading", () => {
+    const d = decidePromotion({
+      reports: [],
+      sensorOverLimit: true,
+      satelliteAnomaly: null,
+      consecutiveSensorOverLimit: 1,
+      sensorAqi: 120,
+      aqiScale: "india",
+      standards,
+    });
+    assert.equal(d.promote, false);
+  });
+
+  it("promotes sensor-only after two consecutive over-limit readings", () => {
+    const d = decidePromotion({
+      reports: [],
+      sensorOverLimit: true,
+      satelliteAnomaly: null,
+      consecutiveSensorOverLimit: 2,
+      sensorAqi: 120,
+      aqiScale: "india",
+      standards,
+    });
+    assert.equal(d.reason, "sensor_only");
+  });
+
+  it("uses the US unhealthy threshold for non-India immediate alerts", () => {
+    const below = decidePromotion({
+      reports: [],
+      sensorOverLimit: true,
+      satelliteAnomaly: null,
+      consecutiveSensorOverLimit: 1,
+      sensorAqi: 140,
+      aqiScale: "us",
+      standards,
+    });
+    const above = decidePromotion({
+      reports: [],
+      sensorOverLimit: true,
+      satelliteAnomaly: null,
+      consecutiveSensorOverLimit: 1,
+      sensorAqi: 160,
+      aqiScale: "us",
+      standards,
+    });
+    assert.equal(below.promote, false);
+    assert.equal(above.reason, "sensor_only");
+  });
+
   it("idempotent dedupe key", () => {
     const day = utcDayKey(new Date("2026-10-11T15:00:00Z"));
     assert.equal(incidentDedupeKey("abc", "citizens", day), incidentDedupeKey("abc", "citizens", day));
@@ -281,6 +336,61 @@ describe("closure", () => {
   });
 });
 
+describe("feeds", () => {
+  it("parses WAQI bounds stations into PM estimates", () => {
+    const rows = parseWaqiStations(
+      { data: [{ uid: 1, aqi: "150", lat: 28.6, lon: 77.2, station: { name: "ITO" } }] },
+      "delhi",
+    );
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]!.sourceFeed, "waqi");
+    assert.equal(rows[0]!.name, "ITO");
+    assert.ok(rows[0]!.pollutants.pm25 != null);
+  });
+
+  it("parses CPCB records", () => {
+    const rows = parseCpcbRecords(
+      { records: [{ station: "RKP", latitude: "28.56", longitude: "77.18", pm25: "90", last_update: "2026-10-11T10:00:00Z" }] },
+      "delhi",
+    );
+    assert.equal(rows[0]!.sourceFeed, "cpcb");
+    assert.equal(rows[0]!.pollutants.pm25, 90);
+  });
+});
+
+describe("twilio", () => {
+  it("rejects a bad signature", () => {
+    const params = { Body: "FIXED", From: "whatsapp:+100" };
+    const good = twilioSignature("https://example.com/api/v1/whatsapp/inbound", params, "token");
+    assert.equal(verifyTwilioSignature("https://example.com/api/v1/whatsapp/inbound", params, "token", good), true);
+    assert.equal(verifyTwilioSignature("https://example.com/api/v1/whatsapp/inbound", params, "token", "nope"), false);
+    assert.equal(verifyTwilioSignature("https://example.com/api/v1/whatsapp/inbound", params, "token", undefined), false);
+  });
+});
+
+describe("upwind and gaps", () => {
+  it("ranks a source upwind above one downwind", () => {
+    const ranked = rankUpwind(
+      { lat: 28.6, lng: 77.2 },
+      180,
+      [
+        { id: "n", name: "north", kind: "industrial", lat: 28.7, lng: 77.2 },
+        { id: "s", name: "south", kind: "landfill", lat: 28.5, lng: 77.2 },
+      ],
+    );
+    assert.ok(ranked.length >= 1);
+    assert.equal(ranked[0]!.id, "s");
+  });
+
+  it("marks a missed diary tick as a gap", () => {
+    const gaps = exposureGaps([
+      { observedAt: "2026-10-11T00:00:00Z", aqi: 100, band: "Satisfactory" },
+      { observedAt: "2026-10-11T03:00:00Z", aqi: 210, band: "Poor" },
+    ]);
+    assert.equal(gaps.length, 1);
+  });
+});
+
 describe("h3 and cities", () => {
   it("maps lat/lng to res 8", () => {
     const h = latLngToH3({ lat: 28.6139, lng: 77.209 });
@@ -291,5 +401,27 @@ describe("h3 and cities", () => {
     assert.ok(getCity("delhi"));
     assert.ok(getCity("beijing"));
     assert.equal(CITIES.length, 12);
+  });
+});
+
+describe("citizen and satellite promotion", () => {
+  const standards = { source: "x", pm25: 60, pm10: 100, no2: 80, so2: 80 };
+  const reports = [{ countsTowardPromotion: true, reporterKey: "citizen-1" }];
+
+  it("promotes citizen+satellite only when satelliteAnomaly is true", () => {
+    const input = {
+      reports,
+      sensorOverLimit: false as boolean | null,
+      consecutiveSensorOverLimit: 0,
+      sensorAqi: 100,
+      aqiScale: "india" as const,
+      standards,
+    };
+    assert.deepEqual(decidePromotion({ ...input, satelliteAnomaly: true }), {
+      promote: true,
+      reason: "citizen_satellite",
+    });
+    assert.deepEqual(decidePromotion({ ...input, satelliteAnomaly: false }), { promote: false, reason: null });
+    assert.deepEqual(decidePromotion({ ...input, satelliteAnomaly: null }), { promote: false, reason: null });
   });
 });

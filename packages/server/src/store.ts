@@ -90,6 +90,7 @@ export type StoredIncident = {
   fusion: Record<string, unknown> | null;
   assignee: string | null;
   workOrder: Record<string, unknown> | null;
+  upwind: Array<Record<string, unknown>>;
   resolvedAt: string | null;
   closure: {
     open: boolean;
@@ -110,7 +111,12 @@ export type IngestStatus = {
   lastError: string | null;
   stationCounts: Record<string, number>;
   satelliteStatus: string;
+  feeds: Record<string, { ok: boolean; error: string | null; count: number }>;
 };
+
+export type StoredFire = { id: string; cityId: string; lat: number; lng: number; at: string };
+export type StoredPlace = { id: string; name: string; kind: "landfill" | "industrial" | "terminal"; lat: number; lng: number };
+export type StoredTask = { id: string; kind: "email" | "whatsapp"; payload: Record<string, unknown>; createdAt: string };
 
 export type DlqItem = {
   messageId: string;
@@ -183,6 +189,12 @@ type Db = {
   hourly: HourlyReading[];
   previousHexAqi: Record<string, number | null>;
   pendingMessages: Array<{ id: string; type: string; body: unknown }>;
+  satelliteCells: Record<string, { h3: string; anomaly: boolean; no2: number | null; cityId: string }>;
+  fires: StoredFire[];
+  osmPlaces: Record<string, StoredPlace[]>;
+  pendingTasks: StoredTask[];
+  modelledHistory: Array<{ stationId: string; at: string; pm25: number }>;
+  sensorStreak: Record<string, number>;
 };
 
 const DEFAULT_DB = (): Db => ({
@@ -204,11 +216,18 @@ const DEFAULT_DB = (): Db => ({
     lastError: null,
     stationCounts: {},
     satelliteStatus: "not_configured",
+    feeds: {},
   },
   exposure: [],
   hourly: [],
   previousHexAqi: {},
   pendingMessages: [],
+  satelliteCells: {},
+  fires: [],
+  osmPlaces: {},
+  pendingTasks: [],
+  modelledHistory: [],
+  sensorStreak: {},
 });
 
 export class FileStore {
@@ -225,18 +244,31 @@ export class FileStore {
     try {
       await readFile(this.dbPath(), "utf8");
     } catch {
-      await this.write(DEFAULT_DB());
+      await writeFile(this.dbPath(), JSON.stringify(DEFAULT_DB(), null, 2));
     }
   }
 
   async read(): Promise<Db> {
     await this.ensure();
     const raw = await readFile(this.dbPath(), "utf8");
-    return { ...DEFAULT_DB(), ...JSON.parse(raw) } as Db;
+    const parsed = JSON.parse(raw) as Partial<Db>;
+    const base = DEFAULT_DB();
+    return {
+      ...base,
+      ...parsed,
+      ingest: { ...base.ingest, ...parsed.ingest },
+      config: { ...base.config, ...parsed.config },
+      satelliteCells: parsed.satelliteCells ?? {},
+      fires: parsed.fires ?? [],
+      osmPlaces: parsed.osmPlaces ?? {},
+      pendingTasks: parsed.pendingTasks ?? [],
+      modelledHistory: parsed.modelledHistory ?? [],
+      sensorStreak: parsed.sensorStreak ?? {},
+    };
   }
 
   async write(db: Db) {
-    await this.ensure();
+    await mkdir(this.root, { recursive: true });
     await writeFile(this.dbPath(), JSON.stringify(db, null, 2));
   }
 

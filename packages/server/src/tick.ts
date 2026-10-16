@@ -12,12 +12,17 @@ import {
   utcDayKey,
   stationOverLimit,
   shouldNotifyAlert,
-  aqiBand,
   latLngToH3,
+  h3ToLatLng,
+  nextSensorStreak,
+  unhealthyThreshold,
+  bandForScale,
   type StationReading,
   type DataMode,
 } from "@zephyr/domain";
 import { FileStore, newId, type StoredIncident } from "./store.js";
+import { anomalyForPoint, fetchCityStations, fetchOsmPlaces, fetchWind, loadSatelliteContext } from "./live.js";
+import { rankUpwind } from "@zephyr/domain";
 
 export type TickOptions = {
   fixturesRoot: string;
@@ -140,12 +145,29 @@ export async function runTick(opts: TickOptions) {
           }
         }
       } else {
-        // Live path: OpenAQ when key present; otherwise leave previous summary.
-        const key = process.env.OPENAQ_API_KEY;
-        if (!key) {
-          throw new Error("OPENAQ_API_KEY not configured for live mode");
+        const live = await fetchCityStations(city);
+        for (const feed of live.feeds) {
+          db.ingest.feeds[`${city.id}:${feed.source}`] = { ok: feed.ok, error: feed.error, count: feed.count };
         }
-        readings = await fetchOpenAq(city.id, city.center.lat, city.center.lng, key);
+        if (live.readings.length === 0 && live.feeds.every((f) => !f.ok)) {
+          db.ingest.lastError = live.feeds.map((f) => `${f.source}: ${f.error}`).join("; ");
+          continue;
+        }
+        readings = live.readings;
+      }
+
+      const satellite = await loadSatelliteContext(city, opts.fixturesRoot, mode);
+      db.ingest.satelliteStatus = satellite.status;
+      for (const cell of satellite.cells) {
+        db.satelliteCells[cell.h3] = { ...cell, cityId: city.id };
+      }
+      db.fires = db.fires.filter((f) => f.cityId !== city.id).concat(satellite.fires);
+      if (mode === "live" && (!db.osmPlaces[city.id]?.length || now.getUTCDay() === 1)) {
+        try {
+          db.osmPlaces[city.id] = await fetchOsmPlaces(city);
+        } catch {
+          db.osmPlaces[city.id] = db.osmPlaces[city.id] ?? [];
+        }
       }
 
       const merged = mergeStations(readings, city.aqiScale, now);
@@ -191,6 +213,7 @@ export async function runTick(opts: TickOptions) {
               aqi: s.aqi,
               online: s.online,
             })),
+            unhealthyThreshold(city.aqiScale),
           );
           joined.push(ward);
           db.wards[`${city.id}_${ward.id}`] = {
@@ -234,11 +257,14 @@ export async function runTick(opts: TickOptions) {
       // Ambient sensor-only promotion per station hex
       for (const s of merged.filter((x) => x.online && x.aqi != null)) {
         const over = stationOverLimit(s.pollutants, city.standards);
+        const streak = nextSensorStreak(db.sensorStreak[s.id] ?? 0, over);
+        db.sensorStreak[s.id] = streak;
+        const satelliteAnomaly = anomalyForPoint(satellite.cells, s.lat, s.lng);
         const decision = decidePromotion({
           reports: [],
           sensorOverLimit: over,
-          satelliteAnomaly: null,
-          consecutiveSensorOverLimit: over ? 2 : 0,
+          satelliteAnomaly,
+          consecutiveSensorOverLimit: streak,
           sensorAqi: s.aqi,
           aqiScale: city.aqiScale,
           standards: city.standards,
@@ -257,7 +283,13 @@ export async function runTick(opts: TickOptions) {
               openedAt: now.toISOString(),
               reportIds: [],
               stationId: s.id,
-              fusion: { sensorScore: 80, satelliteScore: null, visualScore: null, corroborationScore: null },
+              fusion: {
+                sensorScore: 80,
+                satelliteScore: satelliteAnomaly ? 70 : null,
+                visualScore: null,
+                corroborationScore: null,
+              },
+              upwind: [],
               assignee: null,
               workOrder: {
                 priority: s.aqi! >= 301 ? "immediate" : "within_24h",
@@ -296,7 +328,7 @@ export async function runTick(opts: TickOptions) {
         cityId: diary.cityId,
         observedAt: now.toISOString(),
         aqi: joined.covered ? joined.aqi : null,
-        band: joined.aqi != null ? aqiBand(joined.aqi) : null,
+        band: joined.aqi != null ? bandForScale(joined.aqi, getCity(diary.cityId)?.aqiScale ?? "india") : null,
       });
     }
 
@@ -305,30 +337,73 @@ export async function runTick(opts: TickOptions) {
       const stations = Object.values(db.stations).filter((s) => s.cityId === sub.cityId && s.online && s.aqi != null);
       const city = getCity(sub.cityId);
       if (!city) continue;
-      // Approximate hex AQI from nearest station to hex center — use first live station for demo simplicity
-      // Prefer joining via diary-like centroid from previousHexAqi key
-      const live = stations[0];
-      const current = live?.aqi ?? null;
+      const center = h3ToLatLng(sub.h3);
+      const joined = joinWardToStation(
+        { id: sub.h3, name: sub.h3, population: 1, centroid: center },
+        stations.map((s) => ({ id: s.id, lat: s.lat, lng: s.lng, aqi: s.aqi, online: s.online })),
+        unhealthyThreshold(city.aqiScale),
+      );
+      const current = joined.covered ? joined.aqi : null;
       const previous = db.previousHexAqi[sub.h3] ?? null;
       const decision = shouldNotifyAlert({
         previousAqi: previous,
         currentAqi: current,
         lastNotifiedAt: sub.lastNotifiedAt,
+        threshold: unhealthyThreshold(city.aqiScale),
         now,
       });
       if (current != null) db.previousHexAqi[sub.h3] = current;
       if (decision.notify && current != null) {
-        db.notifications.push({
-          id: newId(),
-          uid: sub.uid,
-          h3: sub.h3,
-          aqi: current,
-          channel: sub.channels[0] ?? "in_app",
-          createdAt: now.toISOString(),
-          read: false,
-        });
+        for (const channel of sub.channels.length ? sub.channels : ["in_app" as const]) {
+          db.notifications.push({
+            id: newId(),
+            uid: sub.uid,
+            h3: sub.h3,
+            aqi: current,
+            channel,
+            createdAt: now.toISOString(),
+            read: false,
+          });
+          if (channel === "email" || channel === "whatsapp") {
+            db.pendingTasks.push({
+              id: newId(),
+              kind: channel,
+              payload: { uid: sub.uid, h3: sub.h3, aqi: current, cityId: sub.cityId },
+              createdAt: now.toISOString(),
+            });
+          }
+        }
         sub.lastNotifiedAt = now.toISOString();
       }
+    }
+
+    const windByCity = new Map<string, number>();
+    for (const incident of Object.values(db.incidents)) {
+      if (!["open", "dispatched", "disputed"].includes(incident.status)) continue;
+      const places = db.osmPlaces[incident.cityId] ?? [];
+      const station = incident.stationId ? db.stations[incident.stationId] : undefined;
+      const origin = station
+        ? { lat: station.lat, lng: station.lng }
+        : places[0]
+          ? { lat: places[0].lat, lng: places[0].lng }
+          : null;
+      if (!origin) continue;
+      if (!windByCity.has(incident.cityId)) {
+        const wind = mode === "demo" ? 180 : await fetchWind(origin.lat, origin.lng).catch(() => 0);
+        windByCity.set(incident.cityId, wind);
+      }
+      incident.upwind = rankUpwind(origin, windByCity.get(incident.cityId) ?? 0, [
+        ...places,
+        ...db.fires
+          .filter((f) => f.cityId === incident.cityId)
+          .map((f) => ({
+            id: f.id,
+            name: "fire",
+            kind: "fire" as const,
+            lat: f.lat,
+            lng: f.lng,
+          })),
+      ]);
     }
 
     db.ingest.lastSuccessAt = now.toISOString();
@@ -342,54 +417,4 @@ export async function runTick(opts: TickOptions) {
     await opts.store.write(db);
     return { ok: false as const, error: message };
   }
-}
-
-async function fetchOpenAq(
-  cityId: string,
-  lat: number,
-  lng: number,
-  apiKey: string,
-): Promise<StationReading[]> {
-  const url = new URL("https://api.openaq.org/v3/locations");
-  url.searchParams.set("coordinates", `${lat},${lng}`);
-  url.searchParams.set("radius", "25000");
-  url.searchParams.set("limit", "100");
-  const res = await fetch(url, { headers: { "X-API-Key": apiKey }, signal: AbortSignal.timeout(30_000) });
-  if (!res.ok) throw new Error(`OpenAQ ${res.status}`);
-  const body = (await res.json()) as {
-    results?: Array<{
-      id: number;
-      name: string;
-      coordinates?: { latitude: number; longitude: number };
-      datetimeLast?: { utc?: string };
-      sensors?: Array<{ parameter?: { name?: string }; latest?: { value?: number } }>;
-    }>;
-  };
-  const out: StationReading[] = [];
-  for (const loc of body.results ?? []) {
-    if (!loc.coordinates) continue;
-    const pollutants: StationReading["pollutants"] = {};
-    for (const sensor of loc.sensors ?? []) {
-      const name = sensor.parameter?.name?.toLowerCase();
-      const value = sensor.latest?.value;
-      if (value == null) continue;
-      if (name === "pm25" || name === "pm2.5") pollutants.pm25 = value;
-      if (name === "pm10") pollutants.pm10 = value;
-      if (name === "no2") pollutants.no2 = value;
-      if (name === "so2") pollutants.so2 = value;
-      if (name === "co") pollutants.co = value;
-      if (name === "o3" || name === "ozone") pollutants.ozone = value;
-    }
-    out.push({
-      id: `openaq-${loc.id}`,
-      name: loc.name,
-      cityId,
-      lat: loc.coordinates.latitude,
-      lng: loc.coordinates.longitude,
-      sourceFeed: "openaq",
-      lastSeen: loc.datetimeLast?.utc ?? new Date().toISOString(),
-      pollutants,
-    });
-  }
-  return out;
 }

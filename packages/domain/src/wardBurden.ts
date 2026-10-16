@@ -37,7 +37,11 @@ export type WardBurdenSummary = {
   equity: { p90: number | null; p10: number | null; ratio: number | null };
 };
 
-export function joinWardToStation(ward: WardInput, stations: StationForJoin[]): JoinedWard {
+export function joinWardToStation(
+  ward: WardInput,
+  stations: StationForJoin[],
+  unhealthyAt = POOR_THRESHOLD,
+): JoinedWard {
   const live = stations.filter((s) => s.online && s.aqi != null);
   let best: { station: StationForJoin; km: number } | null = null;
   for (const s of live) {
@@ -62,7 +66,7 @@ export function joinWardToStation(ward: WardInput, stations: StationForJoin[]): 
     distanceKm: Number(best.km.toFixed(2)),
     aqi,
     covered: true,
-    unhealthy: aqi >= POOR_THRESHOLD,
+    unhealthy: aqi >= unhealthyAt,
   };
 }
 

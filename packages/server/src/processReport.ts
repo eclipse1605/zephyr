@@ -11,7 +11,8 @@ import {
   openClosureWindow,
 } from "@zephyr/domain";
 import { FileStore, newId, sha256 } from "./store.js";
-import { classifyPhoto } from "./gemini.js";
+import { classifyPhoto, draftWorkOrder } from "./gemini.js";
+import { isRepeatHotspot } from "@zephyr/domain";
 
 export async function processReportMessage(store: FileStore, reportId: string) {
   const db = await store.read();
@@ -68,6 +69,8 @@ export async function processReportMessage(store: FileStore, reportId: string) {
     }
   }
 
+  const cell = db.satelliteCells[report.h3];
+  const satelliteAnomaly = cell ? cell.anomaly : null;
   const sensorOverLimit =
     nearest && nearestKm <= 3 ? stationOverLimit(nearest.pollutants, city.standards) : null;
   let sensorScore: number | null = null;
@@ -80,7 +83,7 @@ export async function processReportMessage(store: FileStore, reportId: string) {
   const fusion = computeFusionConfidence({
     visualScore,
     sensorScore,
-    satelliteScore: null,
+    satelliteScore: satelliteAnomaly ? 70 : satelliteAnomaly === false ? null : null,
     corroborationScore: corroborationScore(new Set(counting.map((r) => r.reporterKey)).size),
   });
 
@@ -90,7 +93,7 @@ export async function processReportMessage(store: FileStore, reportId: string) {
       reporterKey: r.reporterKey,
     })),
     sensorOverLimit,
-    satelliteAnomaly: null,
+    satelliteAnomaly,
     consecutiveSensorOverLimit: 0,
     sensorAqi: nearest?.aqi ?? null,
     aqiScale: city.aqiScale,
@@ -100,6 +103,16 @@ export async function processReportMessage(store: FileStore, reportId: string) {
   if (decision.promote && decision.reason) {
     const dedupeKey = incidentDedupeKey(report.h3, decision.reason, utcDayKey());
     let incident = Object.values(db.incidents).find((i) => i.dedupeKey === dedupeKey);
+    const history = db.incidentEvents.filter((e) => e.h3 === report.h3);
+    const repeat = isRepeatHotspot(history.map((e) => ({ type: e.type as never, at: e.at, h3: e.h3 })));
+    const workOrder = await draftWorkOrder({
+      city: city.name,
+      language: city.localLanguage?.code ?? "en",
+      hazardType: report.hazardType,
+      reason: decision.reason,
+      aqi: nearest?.aqi ?? null,
+      repeat,
+    });
     if (!incident) {
       const id = newId();
       incident = {
@@ -113,18 +126,12 @@ export async function processReportMessage(store: FileStore, reportId: string) {
         stationId: nearest?.id ?? null,
         fusion,
         assignee: null,
-        workOrder: {
-          priority: "within_24h",
-          summaryEn: `Investigate ${report.hazardType} hotspot in ${city.name}`,
-          summaryLocal: city.localLanguage
-            ? `Investigate ${report.hazardType} hotspot (${city.localLanguage.name})`
-            : null,
-          agency: "Municipal field team",
-        },
+        workOrder,
+        upwind: [],
+        priority: workOrder.priority,
         resolvedAt: null,
         closure: null,
         dedupeKey,
-        priority: "within_24h",
       };
       db.incidents[id] = incident;
       db.incidentEvents.push({
@@ -194,7 +201,15 @@ export async function resolveIncident(
       });
       for (const rid of incident.reportIds) {
         const report = db.reports[rid];
-        if (report) report.status = "resolved";
+        if (report) {
+          report.status = "resolved";
+          db.pendingTasks.push({
+            id: newId(),
+            kind: report.channel === "whatsapp" ? "whatsapp" : "email",
+            payload: { reportId: report.id, event: "resolved", h3: incident.h3 },
+            createdAt: new Date().toISOString(),
+          });
+        }
       }
     }
   });

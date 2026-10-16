@@ -1,0 +1,12 @@
+.aqi-action {
+  margin: 12px 0 0;
+  max-width: 42ch;
+  font-size: 20px;
+  line-height: 1.45;
+  color: var(--ink);
+}
+
+.ward-band {
+  font-weight: 400;
+  margin-inline-start: 0.4em;
+}

@@ -1,5 +1,5 @@
-import type { AqiBand } from "./types.js";
-import { aqiBand } from "./indiaAqi.js";
+import type { AqiBand, AqiScale } from "./types.js";
+import { bandForScale } from "./indiaAqi.js";
 
 export type VulnerableGroup =
   | "children"
@@ -60,12 +60,15 @@ export type GroupAdvisory = {
   groups: Record<VulnerableGroup, string>;
 };
 
-export function groupAdvisoryForAqi(aqi: number): GroupAdvisory {
-  const band = aqiBand(aqi);
+export function groupAdvisoryForAqi(aqi: number, scale: AqiScale = "india"): GroupAdvisory {
+  const band = bandForScale(aqi, scale);
   return {
     band,
     aqi,
-    attribution: "Paraphrase of CPCB National AQI health statements for each band.",
+    attribution:
+      scale === "us"
+        ? "US EPA AQI bands mapped onto the same health actions."
+        : "Paraphrase of CPCB National AQI health statements for each band.",
     groups: ADVISORY[band],
   };
 }

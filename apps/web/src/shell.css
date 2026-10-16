@@ -1,0 +1,109 @@
+.links {
+  flex-wrap: nowrap;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.lang-menu {
+  position: relative;
+}
+
+.lang-menu > .lang-select {
+  width: auto;
+  min-width: 4.25rem;
+  padding-inline: 0.7rem 1.55rem;
+  font-weight: 700;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2.2 4.5 6 8.2l3.8-3.7' fill='none' stroke='%23101a15' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.45rem center;
+  background-size: 12px 12px;
+}
+
+[dir="rtl"] .lang-menu > .lang-select {
+  background-position: left 0.45rem center;
+}
+
+.lang-list {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 6px);
+  inset-inline-end: 0;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  min-width: 240px;
+  max-height: min(70vh, 320px);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: var(--shadow);
+}
+
+.lang-list button {
+  width: 100%;
+  height: auto;
+  min-height: 36px;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 4px 10px;
+  border-color: transparent;
+  background: transparent;
+  font-weight: 600;
+  text-align: start;
+}
+
+.lang-list button:hover,
+.lang-list button.is-current {
+  border-color: transparent;
+  background: rgba(47, 143, 78, 0.12);
+  color: var(--green-dark);
+}
+
+.lang-short {
+  flex: none;
+  width: 3rem;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.lang-list button.is-current .lang-short {
+  color: var(--green-dark);
+}
+
+.links a {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding-block: 0;
+  white-space: nowrap;
+}
+
+.operator-login {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+  margin: -12px 0 16px;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fff;
+}
+
+.operator-login label {
+  display: grid;
+  gap: 6px;
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.operator-login input {
+  min-width: min(280px, 100%);
+}
+
+.operator-login .muted {
+  max-width: none;
+  white-space: normal;
+}

@@ -2,7 +2,7 @@ import { config as loadEnv } from "dotenv";
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { FileStore, newId, processReportMessage, runTick } from "@zephyr/server";
+import { newId, processReportMessage, runTick, deliverPendingTasks, syncState, openStore } from "@zephyr/server";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = process.env.ZEPHYR_ROOT ?? path.resolve(__dirname, "../../..");
@@ -12,7 +12,7 @@ const DATA = process.env.ZEPHYR_DATA_DIR ?? path.join(ROOT, ".data");
 const FIXTURES = process.env.ZEPHYR_FIXTURES ?? path.join(ROOT, "fixtures");
 const PORT = Number(process.env.PORT ?? 8081);
 
-const store = new FileStore(DATA);
+const store = await openStore(DATA);
 const app = express();
 app.use(express.json({ limit: "4mb" }));
 
@@ -22,6 +22,8 @@ app.get("/health", (_req, res) => {
 
 app.post("/internal/tick", async (_req, res) => {
   const result = await runTick({ store, fixturesRoot: FIXTURES });
+  await deliverPendingTasks(store);
+  await syncState(store).catch(() => undefined);
   // Drain locally queued report messages
   const db = await store.read();
   const pending = [...db.pendingMessages];

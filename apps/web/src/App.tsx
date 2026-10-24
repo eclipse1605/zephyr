@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Route, Routes } from "react-router-dom";
-import { api, loadAuth, saveAuth, type Auth, type City } from "./api";
+import { ApiError, api, loadAuth, saveAuth, type Auth, type City } from "./api";
 import { DiaryPage, OperatorPage, PipelinePage, ReportPage, TrackPage, ZonePage } from "./flows";
 import { Home } from "./home";
 import { LANGUAGES } from "./i18n";
@@ -8,21 +8,45 @@ import { LangContext } from "./lang";
 import { MapPage } from "./mapPage";
 import { Shell } from "./shell";
 
+async function syncAuthOperator(session: Auth): Promise<Auth> {
+  try {
+    const me = await api.whoami(session);
+    const next = { ...session, operator: me.operator };
+    saveAuth(next);
+    return next;
+  } catch (err) {
+    if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+      const next = { ...session, operator: false };
+      saveAuth(next);
+      return next;
+    }
+    return session;
+  }
+}
+
 function useAuth() {
   const [auth, setAuth] = useState<Auth | null>(() => loadAuth());
-  const login = (email: string, operator: boolean) => {
-    const next = {
+  const login = (email: string, asOperator: boolean) => {
+    const session: Auth = {
       email,
-      operator,
-      token: operator ? `operator:${email}` : `demo:${email}`,
+      operator: false,
+      token: asOperator ? `operator:${email}` : `demo:${email}`,
     };
-    saveAuth(next);
-    setAuth(next);
+    saveAuth(session);
+    setAuth(session);
+    void syncAuthOperator(session).then(setAuth);
   };
   const logout = () => {
     saveAuth(null);
     setAuth(null);
   };
+  useEffect(() => {
+    const session = loadAuth();
+    if (!session) return;
+    void syncAuthOperator(session).then((next) => {
+      setAuth((current) => (current?.token === next.token ? next : current));
+    });
+  }, []);
   return { auth, login, logout };
 }
 

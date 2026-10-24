@@ -22,6 +22,7 @@ import {
 } from "@zephyr/domain";
 import { FileStore, newId, type StoredIncident } from "./store.js";
 import { anomalyForPoint, fetchCityStations, fetchOsmPlaces, fetchWind, loadSatelliteContext } from "./live.js";
+import { sleep } from "./util.js";
 import { rankUpwind } from "@zephyr/domain";
 
 export type TickOptions = {
@@ -94,13 +95,19 @@ function pickLatest(series: FixtureStation["series"], now: Date) {
   return past[past.length - 1] ?? sorted[sorted.length - 1];
 }
 
+function tickCityPauseMs(): number {
+  const n = Number(process.env.TICK_CITY_PAUSE_MS ?? 4000);
+  return Number.isFinite(n) ? Math.min(60_000, Math.max(0, Math.floor(n))) : 4000;
+}
+
 export async function runTick(opts: TickOptions) {
   const now = opts.now ?? new Date();
   const db = await opts.store.read();
   const mode: DataMode = db.config.dataMode;
 
   try {
-    for (const city of CITIES) {
+    for (let cityIndex = 0; cityIndex < CITIES.length; cityIndex++) {
+      const city = CITIES[cityIndex]!;
       let readings: StationReading[] = [];
 
       if (mode === "demo") {
@@ -256,7 +263,7 @@ export async function runTick(opts: TickOptions) {
 
       // Ambient sensor-only promotion per station hex
       for (const s of merged.filter((x) => x.online && x.aqi != null)) {
-        const over = stationOverLimit(s.pollutants, city.standards);
+        const over = stationOverLimit(s.pollutants, city.standards, s.aqi, city.aqiScale);
         const streak = nextSensorStreak(db.sensorStreak[s.id] ?? 0, over);
         db.sensorStreak[s.id] = streak;
         const satelliteAnomaly = anomalyForPoint(satellite.cells, s.lat, s.lng);
@@ -312,6 +319,11 @@ export async function runTick(opts: TickOptions) {
             });
           }
         }
+      }
+
+      if (mode === "live" && cityIndex < CITIES.length - 1) {
+        const pause = tickCityPauseMs();
+        if (pause > 0) await sleep(pause);
       }
     }
 

@@ -39,12 +39,14 @@ import {
   publishReport,
   openStore,
   forecastTrainingStatus,
+  openAqConfigured,
+  resolveFromRoot,
 } from "@zephyr/server";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = process.env.ZEPHYR_ROOT ?? path.resolve(__dirname, "../../..");
-const DATA = process.env.ZEPHYR_DATA_DIR ?? path.join(ROOT, ".data");
-const FIXTURES = process.env.ZEPHYR_FIXTURES ?? path.join(ROOT, "fixtures");
+const DATA = resolveFromRoot(ROOT, process.env.ZEPHYR_DATA_DIR, path.join(ROOT, ".data"));
+const FIXTURES = resolveFromRoot(ROOT, process.env.ZEPHYR_FIXTURES, path.join(ROOT, "fixtures"));
 const WORKER_URL = process.env.WORKER_URL ?? "http://127.0.0.1:8081";
 const PORT = Number(process.env.PORT ?? 8080);
 
@@ -144,6 +146,12 @@ async function enqueueReport(reportId: string) {
 
 const v1 = express.Router();
 
+v1.get("/auth/whoami", async (req, res) => {
+  const u = await authUser(req);
+  if (!u) return res.status(401).json({ error: "unauthorized" });
+  res.json({ email: u.email, operator: u.operator });
+});
+
 v1.get("/health", async (_req, res) => {
   const db = await store.read();
   res.json({
@@ -152,7 +160,7 @@ v1.get("/health", async (_req, res) => {
     version: "v1",
     dataMode: db.config.dataMode,
     integrations: {
-      openaq: Boolean(process.env.OPENAQ_API_KEY?.trim()),
+      openaq: openAqConfigured(),
       waqi: Boolean(process.env.WAQI_API_TOKEN?.trim()),
       gemini: Boolean(process.env.GEMINI_API_KEY?.trim()),
       twilio: Boolean(process.env.TWILIO_ACCOUNT_SID?.trim()),

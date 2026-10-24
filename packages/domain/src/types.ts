@@ -58,6 +58,8 @@ export type StationReading = {
   sourceFeed: StationSource;
   lastSeen: string; // ISO
   pollutants: PollutantReadings;
+  sourceAqi?: number | null;
+  sourceDominant?: string | null;
 };
 
 export type CityStandards = {

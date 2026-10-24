@@ -731,6 +731,9 @@ export function PipelinePage({ auth, cityId }: { auth: Auth | null; cityId: stri
   const [items, setItems] = useState<Array<Record<string, unknown>>>([]);
   const [health, setHealth] = useState<Health | null>(null);
   const [apiKey, setApiKey] = useState<string | null>(null);
+  const [tickBusy, setTickBusy] = useState(false);
+  const [tickNote, setTickNote] = useState<string | null>(null);
+  const [tickError, setTickError] = useState<string | null>(null);
   void cityId;
 
   const reload = async () => {
@@ -744,13 +747,37 @@ export function PipelinePage({ auth, cityId }: { auth: Auth | null; cityId: stri
     reload().catch(console.error);
   }, [auth]);
 
-  if (!auth?.operator) return <Status>{t(lang, "signInOperator")}</Status>;
+  if (!auth) return <Status>{t(lang, "signInOperator")}</Status>;
+  if (!auth.operator) {
+    return (
+      <div className="card">
+        <p>{t(lang, "operatorNotAllowed")}</p>
+        <p className="muted">{t(lang, "pipelineHint")}</p>
+      </div>
+    );
+  }
 
   const mode = health?.dataMode === "demo" ? "demo" : "live";
+
+  const runTick = async () => {
+    setTickError(null);
+    setTickNote(null);
+    setTickBusy(true);
+    try {
+      await api.tick(auth);
+      await reload();
+      setTickNote(t(lang, "tickDone"));
+    } catch (err) {
+      setTickError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setTickBusy(false);
+    }
+  };
 
   return (
     <div className="stack">
       <PageHead kicker={t(lang, "live")} title={t(lang, "pipeline")} />
+      <p className="muted">{t(lang, "pipelineHint")}</p>
       <div className="card row">
         <span className={`badge ${mode}`}>{health?.dataMode ? t(lang, mode) : ""}</span>
         <button type="button" onClick={() => api.setMode(auth, "demo").then(reload)}>
@@ -759,13 +786,92 @@ export function PipelinePage({ auth, cityId }: { auth: Auth | null; cityId: stri
         <button type="button" onClick={() => api.setMode(auth, "live").then(reload)}>
           {t(lang, "liveMode")}
         </button>
-        <button type="button" className="primary" onClick={() => api.tick(auth).then(reload)}>
-          {t(lang, "runTick")}
+        <button type="button" className="primary" disabled={tickBusy} onClick={() => void runTick()}>
+          {tickBusy ? t(lang, "tickRunning") : t(lang, "runTick")}
         </button>
         <button type="button" onClick={() => api.createApiKey(auth).then((k) => setApiKey(k.apiKey))}>
           {t(lang, "createKey")}
         </button>
       </div>
+      {tickBusy ? <p className="status">{t(lang, "tickRunning")}</p> : null}
+      {tickNote ? <p className="status">{tickNote}</p> : null}
+      {tickError ? (
+        <p className="error">
+          {t(lang, "tickFailed")}: {tickError}
+        </p>
+      ) : null}
+      {health?.ingest?.lastSuccessAt ? (
+        <p className="muted">
+          {t(lang, "lastIngest")}: {formatWhen(health.ingest.lastSuccessAt, lang)}
+        </p>
+      ) : null}
+      {health?.ingest?.lastError ? (
+        <p className="error">
+          {t(lang, "feedError")}: {health.ingest.lastError}
+        </p>
+      ) : null}
+      {health?.ingest?.stationCounts && Object.keys(health.ingest.stationCounts).length > 0 ? (
+        <div className="card">
+          <h2>{t(lang, "ingestSummary")}</h2>
+          <p className="muted">{t(lang, "ingestSummaryHint")}</p>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>{t(lang, "city")}</th>
+                  <th>{t(lang, "ingestStations")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(health.ingest.stationCounts)
+                  .sort(([a], [b]) => a.localeCompare(b))
+                  .map(([cityId, count]) => (
+                    <tr key={cityId}>
+                      <td>{cityId}</td>
+                      <td>{count}</td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
+      {health?.ingest?.feeds && Object.keys(health.ingest.feeds).length > 0 ? (
+        <div className="card">
+          <h2>{t(lang, "ingestFeeds")}</h2>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>{t(lang, "city")}</th>
+                  <th>{t(lang, "source")}</th>
+                  <th>{t(lang, "status")}</th>
+                  <th>{t(lang, "ingestStations")}</th>
+                  <th>{t(lang, "colError")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(health.ingest.feeds)
+                  .sort(([a], [b]) => a.localeCompare(b))
+                  .map(([key, feed]) => {
+                    const split = key.indexOf(":");
+                    const feedCity = split >= 0 ? key.slice(0, split) : key;
+                    const source = split >= 0 ? key.slice(split + 1) : "";
+                    return (
+                      <tr key={key}>
+                        <td>{feedCity}</td>
+                        <td>{source}</td>
+                        <td>{feed.ok ? t(lang, "ingestFeedOk") : t(lang, "ingestFeedFail")}</td>
+                        <td>{feed.count}</td>
+                        <td>{feed.error ?? ""}</td>
+                      </tr>
+                    );
+                  })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
       {apiKey ? (
         <div className="card">
           {t(lang, "apiKeyOnce")}: <code>{apiKey}</code>
@@ -773,6 +879,7 @@ export function PipelinePage({ auth, cityId }: { auth: Auth | null; cityId: stri
       ) : null}
       <div className="card">
         <h2>{t(lang, "dlq")}</h2>
+        <p className="muted">{t(lang, "dlqHint")}</p>
         <div className="table-wrap">
           <table>
             <thead>
@@ -784,6 +891,11 @@ export function PipelinePage({ auth, cityId }: { auth: Auth | null; cityId: stri
               </tr>
             </thead>
             <tbody>
+              {items.length === 0 ? (
+                <tr>
+                  <td colSpan={4} className="muted">{t(lang, "dlqEmpty")}</td>
+                </tr>
+              ) : null}
               {items.map((i) => (
                 <tr key={String(i.messageId)}>
                   <td>{String(i.messageId).slice(0, 8)}</td>

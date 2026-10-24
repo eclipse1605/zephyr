@@ -4,10 +4,15 @@ import {
   parseCpcbRecords,
   parseWaqiStations,
   latLngToH3,
+  openAqPollutantsUsable,
+  pollutantsFromOpenAqLatestRows,
+  pollutantsFromOpenAqSensors,
   type CityConfig,
+  type OpenAqSensorRow,
   type StationReading,
   type StationSource,
 } from "@zephyr/domain";
+import { sleep } from "./util.js";
 
 export type FeedStatus = { source: StationSource; ok: boolean; error: string | null; count: number };
 
@@ -36,51 +41,157 @@ export async function fetchCityStations(city: CityConfig): Promise<{ readings: S
   return { readings, feeds };
 }
 
+const OPENAQ_BASE = "https://api.openaq.org/v3";
+
+type OpenAqLocationRow = {
+  id: number;
+  name: string;
+  coordinates?: { latitude: number; longitude: number };
+  datetimeLast?: { utc?: string };
+  sensors?: OpenAqSensorRow[];
+};
+
+function openAqLocationLimit(): number {
+  const n = Number(process.env.OPENAQ_LOCATION_LIMIT ?? 40);
+  return Number.isFinite(n) ? Math.min(100, Math.max(1, Math.floor(n))) : 40;
+}
+
+function openAqConcurrency(): number {
+  const n = Number(process.env.OPENAQ_CONCURRENCY ?? 8);
+  return Number.isFinite(n) ? Math.min(16, Math.max(1, Math.floor(n))) : 8;
+}
+
+function normalizeOpenAqKey(raw: string): string {
+  return raw.trim().replace(/^['"]+|['"]+$/g, "");
+}
+
+/** Comma- or whitespace-separated pool plus OPENAQ_API_KEY (deduped). */
+export function openAqApiKeys(): string[] {
+  const keys: string[] = [];
+  const single = process.env.OPENAQ_API_KEY?.trim();
+  if (single) keys.push(normalizeOpenAqKey(single));
+  const multi = process.env.OPENAQ_API_KEYS?.trim();
+  if (multi) {
+    for (const part of multi.split(/[\s,]+/)) {
+      const k = normalizeOpenAqKey(part);
+      if (k) keys.push(k);
+    }
+  }
+  return [...new Set(keys)];
+}
+
+export function openAqConfigured(): boolean {
+  return openAqApiKeys().length > 0;
+}
+
+let openAqKeyCursor = 0;
+
+async function openAqGet<T>(path: string): Promise<T> {
+  const keys = openAqApiKeys();
+  if (!keys.length) throw new Error("OPENAQ_API_KEY not configured");
+
+  const start = openAqKeyCursor++ % keys.length;
+  let lastStatus: number | null = null;
+
+  for (let attempt = 0; attempt < keys.length; attempt++) {
+    const key = keys[(start + attempt) % keys.length]!;
+    const res = await fetch(`${OPENAQ_BASE}${path}`, {
+      headers: { "X-API-Key": key },
+      signal: AbortSignal.timeout(25_000),
+    });
+    if (res.status === 429 || res.status === 401) {
+      lastStatus = res.status;
+      await sleep(400 * (attempt + 1));
+      continue;
+    }
+    if (!res.ok) throw new Error(`OpenAQ ${res.status}`);
+    return res.json() as Promise<T>;
+  }
+
+  if (lastStatus === 429) throw new Error("OpenAQ 429");
+  if (lastStatus === 401) throw new Error("OpenAQ 401");
+  throw new Error("OpenAQ request failed");
+}
+
+async function mapConcurrent<T, R>(items: T[], concurrency: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  if (items.length === 0) return [];
+  const results = new Array<R>(items.length);
+  let next = 0;
+  async function worker() {
+    while (true) {
+      const index = next++;
+      if (index >= items.length) return;
+      results[index] = await fn(items[index]!);
+    }
+  }
+  const workers = Math.min(concurrency, items.length);
+  await Promise.all(Array.from({ length: workers }, () => worker()));
+  return results;
+}
+
+async function openAqLocationReading(cityId: string, loc: OpenAqLocationRow): Promise<StationReading | null> {
+  if (!loc.coordinates) return null;
+
+  let pollutants: StationReading["pollutants"] = {};
+  let lastSeen: string | null = loc.datetimeLast?.utc ?? null;
+
+  const fromList = pollutantsFromOpenAqSensors(loc.sensors ?? []);
+  if (openAqPollutantsUsable(fromList.pollutants)) {
+    pollutants = fromList.pollutants;
+    lastSeen = fromList.lastSeen ?? lastSeen;
+  } else {
+    try {
+      const sensorsBody = await openAqGet<{ results?: OpenAqSensorRow[] }>(`/locations/${loc.id}/sensors?limit=100`);
+      const sensors = sensorsBody.results ?? [];
+      const fromSensors = pollutantsFromOpenAqSensors(sensors);
+      pollutants = fromSensors.pollutants;
+      lastSeen = fromSensors.lastSeen ?? lastSeen;
+
+      if (!openAqPollutantsUsable(pollutants) && sensors.length > 0) {
+        const parameterBySensorId = new Map<number, string>();
+        for (const sensor of sensors) {
+          if (sensor.id != null && sensor.parameter?.name) {
+            parameterBySensorId.set(sensor.id, sensor.parameter.name);
+          }
+        }
+        if (parameterBySensorId.size > 0) {
+          const latestBody = await openAqGet<{
+            results?: Array<{ sensorsId?: number; value?: number; datetime?: { utc?: string } }>;
+          }>(`/locations/${loc.id}/latest?limit=100`);
+          const fromLatest = pollutantsFromOpenAqLatestRows(latestBody.results ?? [], parameterBySensorId);
+          if (openAqPollutantsUsable(fromLatest.pollutants)) {
+            pollutants = fromLatest.pollutants;
+            lastSeen = fromLatest.lastSeen ?? lastSeen;
+          }
+        }
+      }
+    } catch {
+      // Keep location metadata; merge may still pair with WAQI/CPCB at same coordinates.
+    }
+  }
+
+  return {
+    id: `openaq-${loc.id}`,
+    name: loc.name,
+    cityId,
+    lat: loc.coordinates.latitude,
+    lng: loc.coordinates.longitude,
+    sourceFeed: "openaq",
+    lastSeen: lastSeen ?? new Date().toISOString(),
+    pollutants,
+  };
+}
+
 async function fetchOpenAq(city: CityConfig): Promise<StationReading[]> {
-  const apiKey = process.env.OPENAQ_API_KEY?.trim();
-  if (!apiKey) throw new Error("OPENAQ_API_KEY not configured");
-  const url = new URL("https://api.openaq.org/v3/locations");
+  if (!openAqConfigured()) throw new Error("OPENAQ_API_KEY not configured");
+  const url = new URL(`${OPENAQ_BASE}/locations`);
   url.searchParams.set("coordinates", `${city.center.lat},${city.center.lng}`);
   url.searchParams.set("radius", "25000");
-  url.searchParams.set("limit", "100");
-  const res = await fetch(url, { headers: { "X-API-Key": apiKey }, signal: AbortSignal.timeout(30_000) });
-  if (!res.ok) throw new Error(`OpenAQ ${res.status}`);
-  const body = (await res.json()) as {
-    results?: Array<{
-      id: number;
-      name: string;
-      coordinates?: { latitude: number; longitude: number };
-      datetimeLast?: { utc?: string };
-      sensors?: Array<{ parameter?: { name?: string }; latest?: { value?: number } }>;
-    }>;
-  };
-  const out: StationReading[] = [];
-  for (const loc of body.results ?? []) {
-    if (!loc.coordinates) continue;
-    const pollutants: StationReading["pollutants"] = {};
-    for (const sensor of loc.sensors ?? []) {
-      const name = sensor.parameter?.name?.toLowerCase();
-      const value = sensor.latest?.value;
-      if (value == null) continue;
-      if (name === "pm25" || name === "pm2.5") pollutants.pm25 = value;
-      if (name === "pm10") pollutants.pm10 = value;
-      if (name === "no2") pollutants.no2 = value;
-      if (name === "so2") pollutants.so2 = value;
-      if (name === "co") pollutants.co = value;
-      if (name === "o3" || name === "ozone") pollutants.ozone = value;
-    }
-    out.push({
-      id: `openaq-${loc.id}`,
-      name: loc.name,
-      cityId: city.id,
-      lat: loc.coordinates.latitude,
-      lng: loc.coordinates.longitude,
-      sourceFeed: "openaq",
-      lastSeen: loc.datetimeLast?.utc ?? new Date().toISOString(),
-      pollutants,
-    });
-  }
-  return out;
+  url.searchParams.set("limit", String(openAqLocationLimit()));
+  const body = await openAqGet<{ results?: OpenAqLocationRow[] }>(`/locations?${url.searchParams.toString()}`);
+  const locations = (body.results ?? []).filter((loc) => loc.coordinates);
+  const readings = await mapConcurrent(locations, openAqConcurrency(), (loc) => openAqLocationReading(city.id, loc));
+  return readings.filter((r): r is StationReading => r != null);
 }
 
 async function fetchWaqi(city: CityConfig): Promise<StationReading[]> {
@@ -96,14 +207,24 @@ async function fetchWaqi(city: CityConfig): Promise<StationReading[]> {
 async function fetchCpcb(city: CityConfig): Promise<StationReading[]> {
   const key = process.env.CPCB_API_KEY?.trim();
   if (!key) throw new Error("CPCB_API_KEY not configured");
-  const url = new URL("https://api.data.gov.in/resource/3b01bcb8-0b14-4abf-b6f2-c1bfd384ba69");
-  url.searchParams.set("api-key", key);
-  url.searchParams.set("format", "json");
-  url.searchParams.set("limit", "100");
-  url.searchParams.set("filters[city]", city.name.replace("New ", ""));
-  const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
-  if (!res.ok) throw new Error(`CPCB ${res.status}`);
-  return parseCpcbRecords(await res.json(), city.id);
+  const records: unknown[] = [];
+  const pageSize = 100;
+  const maxRecords = 500;
+  for (let offset = 0; offset < maxRecords; offset += pageSize) {
+    const url = new URL("https://api.data.gov.in/resource/3b01bcb8-0b14-4abf-b6f2-c1bfd384ba69");
+    url.searchParams.set("api-key", key);
+    url.searchParams.set("format", "json");
+    url.searchParams.set("limit", String(pageSize));
+    url.searchParams.set("offset", String(offset));
+    url.searchParams.set("filters[city]", city.name.replace("New ", ""));
+    const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+    if (!res.ok) throw new Error(`CPCB ${res.status}`);
+    const body = (await res.json()) as { records?: unknown[] };
+    const batch = body.records ?? [];
+    records.push(...batch);
+    if (batch.length < pageSize) break;
+  }
+  return parseCpcbRecords({ records }, city.id);
 }
 
 export type SatelliteCell = { h3: string; anomaly: boolean; no2: number | null };

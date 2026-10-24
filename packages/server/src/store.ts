@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile, readdir, unlink, stat } from "node:fs/promises";
+import { mkdir, readFile, writeFile, rename, readdir, unlink, stat } from "node:fs/promises";
 import path from "node:path";
 import type {
   DataMode,
@@ -269,7 +269,15 @@ export class FileStore {
 
   async write(db: Db) {
     await mkdir(this.root, { recursive: true });
-    await writeFile(this.dbPath(), JSON.stringify(db, null, 2));
+    const target = this.dbPath();
+    const tmp = `${target}.${process.pid}.${Date.now()}.tmp`;
+    try {
+      await writeFile(tmp, JSON.stringify(db, null, 2));
+      await rename(tmp, target);
+    } catch (err) {
+      await unlink(tmp).catch(() => {});
+      throw err;
+    }
   }
 
   async update(fn: (db: Db) => void | Promise<void>): Promise<Db> {

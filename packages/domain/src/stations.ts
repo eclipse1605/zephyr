@@ -1,5 +1,5 @@
 import { haversineKm } from "./geo.js";
-import { indiaAqiFromReadings } from "./indiaAqi.js";
+import { aqiBand, indiaAqiFromReadings, unhealthyThreshold } from "./indiaAqi.js";
 import { usAqiFromReadings } from "./usAqi.js";
 import type { AqiScale, StationReading, StationSource } from "./types.js";
 
@@ -33,12 +33,25 @@ export function enrichStation(
   const online = isStationOnline(reading.lastSeen, now);
   const computed =
     scale === "india" ? indiaAqiFromReadings(reading.pollutants) : usAqiFromReadings(reading.pollutants);
+  const fromSource =
+    online &&
+    !computed &&
+    reading.sourceAqi != null &&
+    Number.isFinite(reading.sourceAqi) &&
+    reading.sourceFeed === "cpcb"
+      ? {
+          aqi: Math.round(reading.sourceAqi),
+          dominant: reading.sourceDominant?.trim() || "CPCB",
+          band: scale === "india" ? aqiBand(Math.round(reading.sourceAqi)) : null,
+        }
+      : null;
+  const resolved = computed ?? fromSource;
   return {
     ...reading,
     online,
-    aqi: online && computed ? computed.aqi : null,
-    dominantPollutant: online && computed ? computed.dominant : null,
-    band: online && computed ? computed.band : null,
+    aqi: online && resolved ? resolved.aqi : null,
+    dominantPollutant: online && resolved ? resolved.dominant : null,
+    band: online && resolved ? resolved.band : null,
   };
 }
 
@@ -63,17 +76,26 @@ export function mergeStations(readings: StationReading[], scale: AqiScale, now: 
 
 function preferStation(a: MergedStation, b: MergedStation): MergedStation {
   if (a.online !== b.online) return a.online ? a : b;
+  const aHas = a.aqi != null;
+  const bHas = b.aqi != null;
+  if (aHas !== bHas) return aHas ? a : b;
   const aTime = Date.parse(a.lastSeen);
   const bTime = Date.parse(b.lastSeen);
-  if (aTime !== bTime) return bTime > aTime ? b : a;
+  const aOk = Number.isFinite(aTime);
+  const bOk = Number.isFinite(bTime);
+  if (aOk !== bOk) return aOk ? a : b;
+  if (aOk && aTime !== bTime) return bTime > aTime ? b : a;
   return FEED_RANK[a.sourceFeed] <= FEED_RANK[b.sourceFeed] ? a : b;
 }
 
 export function stationOverLimit(
   pollutants: StationReading["pollutants"],
   standards: { pm25: number; pm10: number },
+  aqi?: number | null,
+  scale?: AqiScale,
 ): boolean {
   if (pollutants.pm25 != null && pollutants.pm25 > standards.pm25) return true;
   if (pollutants.pm10 != null && pollutants.pm10 > standards.pm10) return true;
+  if (aqi != null && scale && aqi >= unhealthyThreshold(scale)) return true;
   return false;
 }

@@ -16,6 +16,8 @@ export type Health = {
     lastError?: string | null;
     lastSuccessAt?: string | null;
     satelliteStatus?: string | null;
+    stationCounts?: Record<string, number>;
+    feeds?: Record<string, { ok: boolean; error: string | null; count: number }>;
   } | null;
   integrations: Record<string, boolean>;
 };
@@ -156,6 +158,15 @@ export function saveAuth(auth: Auth | null) {
   else localStorage.setItem("zephyr.auth", JSON.stringify(auth));
 }
 
+export class ApiError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 async function req<T>(path: string, init: RequestInit = {}, auth?: Auth | null): Promise<T> {
   const headers = new Headers(init.headers);
   if (auth?.token) headers.set("Authorization", `Bearer ${auth.token}`);
@@ -163,7 +174,7 @@ async function req<T>(path: string, init: RequestInit = {}, auth?: Auth | null):
   const res = await fetch(`${API}${path}`, { ...init, headers });
   if (!res.ok) {
     const err = (await res.json().catch(() => ({ error: res.statusText }))) as { error?: string };
-    throw new Error(err.error ?? res.statusText);
+    throw new ApiError(err.error ?? res.statusText, res.status);
   }
   return res.json() as Promise<T>;
 }
@@ -220,9 +231,10 @@ export const api = {
     req(`/operator/incidents/${id}/${action}`, { method: "POST", body: "{}" }, auth),
   dlq: (auth: Auth) => req<{ items: Array<Record<string, unknown>> }>("/operator/dlq", {}, auth),
   replay: (auth: Auth, id: string) => req(`/operator/dlq/${id}/replay`, { method: "POST", body: "{}" }, auth),
+  whoami: (auth: Auth) => req<{ email: string; operator: boolean }>("/auth/whoami", {}, auth),
   setMode: (auth: Auth, dataMode: "live" | "demo") =>
     req("/system/data-mode", { method: "POST", body: JSON.stringify({ dataMode }) }, auth),
-  tick: (auth: Auth) => req("/system/tick", { method: "POST", body: "{}" }, auth),
+  tick: (auth: Auth) => req<{ ok?: boolean; via?: string; mode?: string; error?: string }>("/system/tick", { method: "POST", body: "{}" }, auth),
   copilot: (auth: Auth, question: string) =>
     req<{ answer: string; toolsUsed: string[] }>("/operator/copilot", {
       method: "POST",

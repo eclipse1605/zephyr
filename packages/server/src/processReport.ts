@@ -72,7 +72,7 @@ export async function processReportMessage(store: FileStore, reportId: string) {
   const cell = db.satelliteCells[report.h3];
   const satelliteAnomaly = cell ? cell.anomaly : null;
   const sensorOverLimit =
-    nearest && nearestKm <= 3 ? stationOverLimit(nearest.pollutants, city.standards) : null;
+    nearest && nearestKm <= 3 ? stationOverLimit(nearest.pollutants, city.standards, nearest.aqi, city.aqiScale) : null;
   let sensorScore: number | null = null;
   if (nearest?.aqi != null && sensorOverLimit) {
     const pct = nearest.pollutants.pm25 != null ? ((nearest.pollutants.pm25 - city.standards.pm25) / city.standards.pm25) * 100 : 50;

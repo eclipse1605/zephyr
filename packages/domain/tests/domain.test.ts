@@ -1,8 +1,12 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  pollutantsFromOpenAqLatestRows,
+  pollutantsFromOpenAqSensors,
+  openAqPollutantsUsable,
   parseWaqiStations,
   parseCpcbRecords,
+  parseCpcbLastUpdate,
   verifyTwilioSignature,
   twilioSignature,
   rankUpwind,
@@ -11,6 +15,8 @@ import {
   usAqiFromReadings,
   aqiBand,
   mergeStations,
+  enrichStation,
+  stationOverLimit,
   isStationOnline,
   decidePromotion,
   incidentDedupeKey,
@@ -83,6 +89,68 @@ describe("stations", () => {
           sourceFeed: "waqi",
           lastSeen: "2026-10-11T10:00:00Z",
           pollutants: { pm25: 50 },
+        },
+        {
+          id: "b",
+          name: "B",
+          cityId: "delhi",
+          lat: 28.6101,
+          lng: 77.2101,
+          sourceFeed: "openaq",
+          lastSeen: "2026-10-11T11:00:00Z",
+          pollutants: { pm25: 55 },
+        },
+      ],
+      "india",
+      now,
+    );
+    assert.equal(merged.length, 1);
+    assert.equal(merged[0]!.sourceFeed, "openaq");
+  });
+
+  it("uses CPCB sourceAqi when concentrations are missing", () => {
+    const enriched = enrichStation(
+      {
+        id: "cpcb-RKP-28.5600-77.1800",
+        name: "RKP",
+        cityId: "delhi",
+        lat: 28.56,
+        lng: 77.18,
+        sourceFeed: "cpcb",
+        lastSeen: "2026-10-11T10:00:00Z",
+        pollutants: {},
+        sourceAqi: 120,
+        sourceDominant: "PM10",
+      },
+      "india",
+      now,
+    );
+    assert.equal(enriched.online, true);
+    assert.equal(enriched.aqi, 120);
+    assert.equal(enriched.dominantPollutant, "PM10");
+    assert.equal(enriched.band, "Moderate");
+  });
+
+  it("treats CPCB AQI as over-limit when concentrations are empty", () => {
+    const standards = { pm25: 60, pm10: 100, no2: 80, so2: 80 };
+    assert.equal(stationOverLimit({}, standards), false);
+    assert.equal(stationOverLimit({}, standards, 120, "india"), false);
+    assert.equal(stationOverLimit({}, standards, 210, "india"), true);
+  });
+
+  it("prefers a station with a parseable lastSeen over an empty stamp", () => {
+    const merged = mergeStations(
+      [
+        {
+          id: "a",
+          name: "A",
+          cityId: "delhi",
+          lat: 28.61,
+          lng: 77.21,
+          sourceFeed: "cpcb",
+          lastSeen: "",
+          pollutants: {},
+          sourceAqi: 90,
         },
         {
           id: "b",
@@ -348,13 +416,114 @@ describe("feeds", () => {
     assert.ok(rows[0]!.pollutants.pm25 != null);
   });
 
+  it("parses OpenAQ sensors with embedded latest", () => {
+    const { pollutants, lastSeen } = pollutantsFromOpenAqSensors([
+      {
+        id: 1,
+        parameter: { name: "pm25" },
+        latest: { value: 42, datetime: { utc: "2026-10-11T10:00:00Z" } },
+      },
+      {
+        id: 2,
+        parameter: { name: "pm10" },
+        latest: { value: 80, datetime: { utc: "2026-10-11T09:00:00Z" } },
+      },
+    ]);
+    assert.equal(pollutants.pm25, 42);
+    assert.equal(pollutants.pm10, 80);
+    assert.equal(lastSeen, "2026-10-11T10:00:00Z");
+    assert.equal(openAqPollutantsUsable(pollutants), true);
+  });
+
+  it("parses OpenAQ latest rows with sensor parameter map", () => {
+    const map = new Map<number, string>([[99, "pm25"]]);
+    const { pollutants } = pollutantsFromOpenAqLatestRows(
+      [{ sensorsId: 99, value: 55, datetime: { utc: "2026-10-11T11:00:00Z" } }],
+      map,
+    );
+    assert.equal(pollutants.pm25, 55);
+  });
+
   it("parses CPCB records", () => {
     const rows = parseCpcbRecords(
-      { records: [{ station: "RKP", latitude: "28.56", longitude: "77.18", pm25: "90", last_update: "2026-10-11T10:00:00Z" }] },
+      {
+        records: [
+          {
+            station: "RKP",
+            latitude: "28.56",
+            longitude: "77.18",
+            pollutant_id: "PM2.5",
+            pollutant_avg: "90",
+            last_update: "11-10-2026 10:00:00",
+          },
+          {
+            station: "RKP",
+            latitude: "28.56",
+            longitude: "77.18",
+            pollutant_id: "PM10",
+            pollutant_avg: "120",
+            last_update: "11-10-2026 10:00:00",
+          },
+        ],
+      },
       "delhi",
     );
+    assert.equal(rows.length, 1);
     assert.equal(rows[0]!.sourceFeed, "cpcb");
-    assert.equal(rows[0]!.pollutants.pm25, 90);
+    assert.equal(rows[0]!.sourceAqi, 120);
+    assert.equal(rows[0]!.sourceDominant, "PM10");
+    assert.equal(rows[0]!.lastSeen, "2026-10-11T04:30:00.000Z");
+    assert.equal(rows[0]!.id, "cpcb-RKP-28.5600-77.1800");
+  });
+
+  it("keeps CPCB stations with the same name at different coordinates", () => {
+    const rows = parseCpcbRecords(
+      {
+        records: [
+          { station: "Secretariat", latitude: "28.61", longitude: "77.20", pollutant_avg: "80", last_update: "11-10-2026 10:00:00" },
+          { station: "Secretariat", latitude: "28.70", longitude: "77.30", pollutant_avg: "90", last_update: "11-10-2026 10:00:00" },
+        ],
+      },
+      "delhi",
+    );
+    assert.equal(rows.length, 2);
+    assert.notEqual(rows[0]!.id, rows[1]!.id);
+  });
+
+  it("parses CPCB last_update and rejects empty stamps", () => {
+    assert.equal(parseCpcbLastUpdate("11-10-2026 10:00:00"), "2026-10-11T04:30:00.000Z");
+    assert.equal(parseCpcbLastUpdate(""), null);
+    assert.equal(parseCpcbLastUpdate("NA"), null);
+  });
+
+  it("parses CPCB records with data.gov avg_value fields", () => {
+    const rows = parseCpcbRecords(
+      {
+        records: [
+          {
+            station: "Kompally",
+            latitude: "17.54",
+            longitude: "78.48",
+            pollutant_id: "PM2.5",
+            avg_value: "34",
+            last_update: "24-10-2026 15:00:00",
+          },
+          {
+            station: "Kompally",
+            latitude: "17.54",
+            longitude: "78.48",
+            pollutant_id: "NO2",
+            avg_value: "12",
+            last_update: "24-10-2026 15:00:00",
+          },
+        ],
+      },
+      "hyderabad",
+    );
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]!.sourceAqi, 34);
+    assert.equal(rows[0]!.sourceDominant, "PM2.5");
+    assert.equal(rows[0]!.lastSeen, "2026-10-24T09:30:00.000Z");
   });
 });
 

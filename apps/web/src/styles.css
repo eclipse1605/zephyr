@@ -167,6 +167,7 @@ button:disabled, button:disabled:hover { opacity: 0.55; cursor: not-allowed; bor
   justify-content: space-between;
   gap: 16px;
 }
+.head-actions { align-self: flex-end; }
 .eyebrow {
   margin: 0 0 8px;
   color: var(--green-dark);
@@ -251,6 +252,47 @@ h1 {
   font-size: 0.78rem;
   font-weight: 700;
 }
+.mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  margin: 0;
+  padding: 4px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--control);
+  color: var(--muted);
+  font-weight: 700;
+  cursor: pointer;
+}
+.mode-toggle span.is-active { color: var(--ink); }
+.mode-switch {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  border-radius: 999px;
+  background: #fff4d6;
+}
+.mode-toggle.live .mode-switch { background: #e5f6ea; }
+.mode-switch::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: #6b4e00;
+  transition: transform 0.15s ease;
+}
+.mode-toggle.live .mode-switch::after {
+  transform: translateX(20px);
+  background: var(--green);
+}
+.mode-toggle:disabled { opacity: 0.55; cursor: not-allowed; }
+button.mode-toggle:active { background: var(--control); }
+
 .badge.demo { background: #fff4d6; color: #6b4e00; }
 .badge.live { background: #e5f6ea; color: var(--green-dark); }
 .badge.bad { background: #fde8e6; color: var(--red); }
@@ -370,4 +412,5 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 
 @media (prefers-reduced-motion: reduce) {
   * { scroll-behavior: auto; }
+  .mode-switch::after { transition: none; }
 }

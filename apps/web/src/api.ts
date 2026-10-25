@@ -225,7 +225,6 @@ export const api = {
   subscriptions: (auth: Auth) => req<{ subscriptions: unknown[]; notifications: unknown[] }>("/me/subscriptions", {}, auth),
   subscribe: (auth: Auth, body: { h3: string; cityId: string; channels: string[] }) =>
     req("/me/subscriptions", { method: "POST", body: JSON.stringify(body) }, auth),
-  createApiKey: (auth: Auth) => req<{ apiKey: string }>("/api-keys", { method: "POST", body: "{}" }, auth),
   incidents: (auth: Auth) => req<{ incidents: OperatorIncident[] }>("/operator/incidents", {}, auth),
   incidentAction: (auth: Auth, id: string, action: string) =>
     req(`/operator/incidents/${id}/${action}`, { method: "POST", body: "{}" }, auth),

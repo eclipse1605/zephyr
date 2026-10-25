@@ -68,3 +68,262 @@
     align-items: start;
   }
 }
+
+.copilot-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: rgba(8, 16, 12, 0.42);
+  backdrop-filter: blur(4px);
+  cursor: pointer;
+  animation: copilot-scrim-in 0.2s ease;
+}
+
+.copilot-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  width: min(100%, 440px);
+  background:
+    radial-gradient(120% 80% at 100% 0%, var(--glow), transparent 55%),
+    var(--surface);
+  border-left: 1px solid var(--line);
+  box-shadow: -24px 0 48px -24px rgba(8, 16, 12, 0.35);
+  animation: copilot-panel-in 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.copilot-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 20px 20px 16px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 92%, var(--bg-warm));
+}
+
+.copilot-eyebrow {
+  margin: 0 0 4px;
+  color: var(--green-dark);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.copilot-panel-title h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 1.35rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+}
+
+.copilot-panel-close {
+  flex: none;
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  padding: 0;
+  border-radius: 999px;
+  border-color: var(--line);
+  background: var(--bg-warm);
+  color: var(--muted);
+  font-size: 1.35rem;
+  line-height: 1;
+}
+
+.copilot-panel-close:hover {
+  color: var(--ink);
+  border-color: var(--line-strong);
+}
+
+.copilot-panel-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.copilot-thread {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 20px;
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+
+.copilot-empty {
+  padding: 28px 20px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 16px;
+  background: var(--bg-warm);
+  text-align: center;
+}
+
+.copilot-empty-title {
+  margin: 0 0 8px;
+  font-size: 1.05rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.copilot-empty p {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+.copilot-bubble {
+  display: grid;
+  gap: 6px;
+  max-width: 100%;
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+}
+
+.copilot-bubble p {
+  margin: 0;
+  line-height: 1.55;
+  font-size: 0.95rem;
+}
+
+.copilot-bubble-label {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.copilot-bubble-user {
+  margin-inline-start: 24px;
+  border-color: color-mix(in srgb, var(--green) 28%, var(--line));
+  background: color-mix(in srgb, var(--green) 8%, var(--surface));
+}
+
+.copilot-bubble-assistant {
+  margin-inline-end: 12px;
+  background: var(--bg-warm);
+  border-inline-start: 3px solid var(--green);
+  border-start-start-radius: 4px;
+}
+
+.copilot-bubble-pending p {
+  position: relative;
+  padding-inline-start: 1.25rem;
+}
+
+.copilot-bubble-pending p::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.45em;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 999px;
+  background: var(--green);
+  animation: copilot-pulse 1s ease-in-out infinite;
+}
+
+.copilot-answer {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.92rem;
+}
+
+.copilot-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.copilot-tools-label {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.copilot-tools .badge {
+  font-size: 0.72rem;
+  min-height: 24px;
+  padding: 2px 8px;
+}
+
+.copilot-composer {
+  display: grid;
+  gap: 10px;
+  padding: 16px 20px 20px;
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg-warm) 88%, var(--surface));
+}
+
+.copilot-composer textarea {
+  min-height: 88px;
+  resize: vertical;
+  border-radius: 14px;
+  border-color: var(--line-strong);
+  background: var(--control);
+  line-height: 1.45;
+  box-shadow: inset 0 1px 2px rgba(8, 16, 12, 0.04);
+}
+
+.copilot-composer textarea:focus-visible {
+  border-color: var(--green);
+  box-shadow: 0 0 0 3px rgba(47, 143, 78, 0.18);
+}
+
+.copilot-send {
+  justify-self: end;
+  min-width: 7.5rem;
+  border-radius: 999px;
+}
+
+@keyframes copilot-panel-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes copilot-scrim-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes copilot-pulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.92); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .copilot-panel,
+  .copilot-scrim,
+  .copilot-bubble-pending p::before {
+    animation: none;
+  }
+}

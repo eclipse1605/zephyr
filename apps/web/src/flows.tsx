@@ -635,7 +635,11 @@ export function OperatorPage({ auth, cityId }: { auth: Auth | null; cityId: stri
   const lang = useLang();
   const [incidents, setIncidents] = useState<OperatorIncident[]>([]);
   const [question, setQuestion] = useState("");
+  const [lastQuestion, setLastQuestion] = useState("");
   const [answer, setAnswer] = useState("");
+  const [toolsUsed, setToolsUsed] = useState<string[]>([]);
+  const [copilotOpen, setCopilotOpen] = useState(false);
+  const [copilotBusy, setCopilotBusy] = useState(false);
   void cityId;
 
   const reload = () => {
@@ -648,6 +652,39 @@ export function OperatorPage({ auth, cityId }: { auth: Auth | null; cityId: stri
     reload().catch(console.error);
   }, [auth]);
 
+  useEffect(() => {
+    if (!copilotOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setCopilotOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [copilotOpen]);
+
+  const askCopilot = async () => {
+    const text = question.trim();
+    if (!auth?.operator || copilotBusy || !text) return;
+    setLastQuestion(text);
+    setCopilotBusy(true);
+    setAnswer("");
+    setToolsUsed([]);
+    try {
+      const r = await api.copilot(auth, text);
+      setAnswer(r.answer);
+      setToolsUsed(r.toolsUsed);
+    } catch (err) {
+      setAnswer(err instanceof Error ? err.message : String(err));
+      setToolsUsed([]);
+    } finally {
+      setCopilotBusy(false);
+    }
+  };
+
   if (!auth?.operator) return <Status>{t(lang, "signInOperator")}</Status>;
 
   const confirmAction = (id: string, action: string, message: string) => {
@@ -657,7 +694,19 @@ export function OperatorPage({ auth, cityId }: { auth: Auth | null; cityId: stri
 
   return (
     <div className="stack">
-      <PageHead kicker={t(lang, "queue")} title={t(lang, "operator")} />
+      <PageHead kicker={t(lang, "queue")} title={t(lang, "operator")}>
+        <div className="row head-actions">
+          <button
+            type="button"
+            className={copilotOpen ? "primary" : undefined}
+            aria-expanded={copilotOpen}
+            aria-controls="operator-copilot-panel"
+            onClick={() => setCopilotOpen((open) => !open)}
+          >
+            {t(lang, "copilot")}
+          </button>
+        </div>
+      </PageHead>
       <div className="card">
         <h2>{t(lang, "queue")}</h2>
         <div className="table-wrap">
@@ -707,21 +756,94 @@ export function OperatorPage({ auth, cityId }: { auth: Auth | null; cityId: stri
           </table>
         </div>
       </div>
-      <div className="card form">
-        <h3>{t(lang, "copilot")}</h3>
-        <textarea value={question} onChange={(e) => setQuestion(e.target.value)} placeholder={t(lang, "copilotHint")} />
-        <button
-          type="button"
-          className="primary"
-          onClick={async () => {
-            const r = await api.copilot(auth, question);
-            setAnswer(`${r.answer}\n\n${t(lang, "tools")}: ${r.toolsUsed.join(", ")}`);
-          }}
-        >
-          {t(lang, "ask")}
-        </button>
-        {answer ? <pre className="muted">{answer}</pre> : null}
-      </div>
+      {copilotOpen ? (
+        <>
+          <button
+            type="button"
+            className="copilot-scrim"
+            aria-label={t(lang, "close")}
+            onClick={() => setCopilotOpen(false)}
+          />
+          <aside
+            id="operator-copilot-panel"
+            className="copilot-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="operator-copilot-title"
+          >
+            <header className="copilot-panel-head">
+              <div className="copilot-panel-title">
+                <p className="copilot-eyebrow">{t(lang, "queue")}</p>
+                <h2 id="operator-copilot-title">{t(lang, "copilot")}</h2>
+              </div>
+              <button
+                type="button"
+                className="copilot-panel-close"
+                aria-label={t(lang, "close")}
+                onClick={() => setCopilotOpen(false)}
+              >
+                ×
+              </button>
+            </header>
+            <div className="copilot-panel-body">
+              <div className="copilot-thread" aria-live="polite">
+                {!lastQuestion && !copilotBusy ? (
+                  <div className="copilot-empty">
+                    <p className="copilot-empty-title">{t(lang, "copilot")}</p>
+                    <p className="muted">{t(lang, "copilotHint")}</p>
+                  </div>
+                ) : null}
+                {lastQuestion ? (
+                  <div className="copilot-bubble copilot-bubble-user">
+                    <span className="copilot-bubble-label">{t(lang, "operator")}</span>
+                    <p>{lastQuestion}</p>
+                  </div>
+                ) : null}
+                {copilotBusy ? (
+                  <div className="copilot-bubble copilot-bubble-assistant copilot-bubble-pending" aria-busy="true">
+                    <span className="copilot-bubble-label">{t(lang, "copilot")}</span>
+                    <p className="muted">{t(lang, "loading")}</p>
+                  </div>
+                ) : null}
+                {!copilotBusy && answer ? (
+                  <div className="copilot-bubble copilot-bubble-assistant">
+                    <span className="copilot-bubble-label">{t(lang, "copilot")}</span>
+                    <p className="copilot-answer">{answer}</p>
+                    {toolsUsed.length > 0 ? (
+                      <div className="copilot-tools">
+                        <span className="copilot-tools-label">{t(lang, "tools")}</span>
+                        {toolsUsed.map((tool) => (
+                          <span key={tool} className="badge demo">{tool}</span>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+              <form
+                className="copilot-composer"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void askCopilot();
+                }}
+              >
+                <label className="sr" htmlFor="operator-copilot-question">{t(lang, "copilotHint")}</label>
+                <textarea
+                  id="operator-copilot-question"
+                  value={question}
+                  onChange={(e) => setQuestion(e.target.value)}
+                  placeholder={t(lang, "copilotHint")}
+                  rows={3}
+                  disabled={copilotBusy}
+                />
+                <button type="submit" className="primary copilot-send" disabled={copilotBusy || !question.trim()}>
+                  {copilotBusy ? t(lang, "loading") : t(lang, "ask")}
+                </button>
+              </form>
+            </div>
+          </aside>
+        </>
+      ) : null}
     </div>
   );
 }
@@ -730,7 +852,7 @@ export function PipelinePage({ auth, cityId }: { auth: Auth | null; cityId: stri
   const lang = useLang();
   const [items, setItems] = useState<Array<Record<string, unknown>>>([]);
   const [health, setHealth] = useState<Health | null>(null);
-  const [apiKey, setApiKey] = useState<string | null>(null);
+  const [modeBusy, setModeBusy] = useState(false);
   const [tickBusy, setTickBusy] = useState(false);
   const [tickNote, setTickNote] = useState<string | null>(null);
   const [tickError, setTickError] = useState<string | null>(null);
@@ -752,12 +874,25 @@ export function PipelinePage({ auth, cityId }: { auth: Auth | null; cityId: stri
     return (
       <div className="card">
         <p>{t(lang, "operatorNotAllowed")}</p>
-        <p className="muted">{t(lang, "pipelineHint")}</p>
       </div>
     );
   }
 
-  const mode = health?.dataMode === "demo" ? "demo" : "live";
+  const mode = health?.dataMode === "live" || health?.dataMode === "demo" ? health.dataMode : null;
+
+  const setDataMode = async (next: "demo" | "live") => {
+    if (!mode || next === mode || modeBusy) return;
+    setTickError(null);
+    setModeBusy(true);
+    try {
+      await api.setMode(auth, next);
+      await reload();
+    } catch (err) {
+      setTickError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setModeBusy(false);
+    }
+  };
 
   const runTick = async () => {
     setTickError(null);
@@ -776,23 +911,26 @@ export function PipelinePage({ auth, cityId }: { auth: Auth | null; cityId: stri
 
   return (
     <div className="stack">
-      <PageHead kicker={t(lang, "live")} title={t(lang, "pipeline")} />
-      <p className="muted">{t(lang, "pipelineHint")}</p>
-      <div className="card row">
-        <span className={`badge ${mode}`}>{health?.dataMode ? t(lang, mode) : ""}</span>
-        <button type="button" onClick={() => api.setMode(auth, "demo").then(reload)}>
-          {t(lang, "demoMode")}
-        </button>
-        <button type="button" onClick={() => api.setMode(auth, "live").then(reload)}>
-          {t(lang, "liveMode")}
-        </button>
-        <button type="button" className="primary" disabled={tickBusy} onClick={() => void runTick()}>
-          {tickBusy ? t(lang, "tickRunning") : t(lang, "runTick")}
-        </button>
-        <button type="button" onClick={() => api.createApiKey(auth).then((k) => setApiKey(k.apiKey))}>
-          {t(lang, "createKey")}
-        </button>
-      </div>
+      <PageHead kicker={t(lang, "live")} title={t(lang, "pipeline")}>
+        <div className="row head-actions">
+          <button
+            type="button"
+            role="switch"
+            className={`mode-toggle${mode ? ` ${mode}` : ""}`}
+            aria-checked={mode === "live"}
+            aria-label={mode === "live" ? t(lang, "liveMode") : t(lang, "demoMode")}
+            disabled={!mode || modeBusy || tickBusy}
+            onClick={() => void setDataMode(mode === "live" ? "demo" : "live")}
+          >
+            <span className={mode === "demo" ? "is-active" : undefined}>{t(lang, "demoMode")}</span>
+            <span className="mode-switch" aria-hidden="true" />
+            <span className={mode === "live" ? "is-active" : undefined}>{t(lang, "liveMode")}</span>
+          </button>
+          <button type="button" className="primary" disabled={tickBusy || modeBusy} onClick={() => void runTick()}>
+            {tickBusy ? t(lang, "tickRunning") : t(lang, "runTick")}
+          </button>
+        </div>
+      </PageHead>
       {tickBusy ? <p className="status">{t(lang, "tickRunning")}</p> : null}
       {tickNote ? <p className="status">{tickNote}</p> : null}
       {tickError ? (
@@ -870,11 +1008,6 @@ export function PipelinePage({ auth, cityId }: { auth: Auth | null; cityId: stri
               </tbody>
             </table>
           </div>
-        </div>
-      ) : null}
-      {apiKey ? (
-        <div className="card">
-          {t(lang, "apiKeyOnce")}: <code>{apiKey}</code>
         </div>
       ) : null}
       <div className="card">

@@ -41,6 +41,7 @@ import {
   forecastTrainingStatus,
   openAqConfigured,
   resolveFromRoot,
+  resolveListenPort,
 } from "@zephyr/server";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -48,7 +49,7 @@ const ROOT = process.env.ZEPHYR_ROOT ?? path.resolve(__dirname, "../../..");
 const DATA = resolveFromRoot(ROOT, process.env.ZEPHYR_DATA_DIR, path.join(ROOT, ".data"));
 const FIXTURES = resolveFromRoot(ROOT, process.env.ZEPHYR_FIXTURES, path.join(ROOT, "fixtures"));
 const WORKER_URL = process.env.WORKER_URL ?? "http://127.0.0.1:8081";
-const PORT = Number(process.env.PORT ?? 8080);
+const PORT = resolveListenPort("api");
 
 const store = await openStore(DATA);
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });

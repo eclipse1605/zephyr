@@ -172,6 +172,10 @@ async function req<T>(path: string, init: RequestInit = {}, auth?: Auth | null):
   if (auth?.token) headers.set("Authorization", `Bearer ${auth.token}`);
   if (init.body && !(init.body instanceof FormData)) headers.set("Content-Type", "application/json");
   const res = await fetch(`${API}${path}`, { ...init, headers });
+  const type = res.headers.get("content-type") ?? "";
+  if (!type.includes("application/json")) {
+    throw new ApiError(`API at ${API}${path} returned ${type || "non-JSON"} (is the Vite proxy hitting the API?)`, res.status);
+  }
   if (!res.ok) {
     const err = (await res.json().catch(() => ({ error: res.statusText }))) as { error?: string };
     throw new ApiError(err.error ?? res.statusText, res.status);

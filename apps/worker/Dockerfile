@@ -1,16 +1,15 @@
-FROM node:22-bookworm-slim AS build
+FROM oven/bun:1 AS build
 WORKDIR /app
-RUN corepack enable
-COPY package.json pnpm-workspace.yaml ./
+COPY package.json bun.lock ./
 COPY packages ./packages
 COPY apps/worker ./apps/worker
-RUN pnpm install --filter @zephyr/worker... && pnpm --filter @zephyr/domain build && pnpm --filter @zephyr/server build && pnpm --filter @zephyr/worker build
+RUN bun install --frozen-lockfile --filter @zephyr/worker
+RUN bun run --filter @zephyr/domain build && bun run --filter @zephyr/server build && bun run --filter @zephyr/worker build
 
-FROM node:22-bookworm-slim
+FROM oven/bun:1
 WORKDIR /app
 ENV NODE_ENV=production
-RUN corepack enable
 COPY --from=build /app /app
 WORKDIR /app/apps/worker
 EXPOSE 8081
-CMD ["node", "dist/index.js"]
+CMD ["bun", "dist/index.js"]

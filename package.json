@@ -1,19 +1,20 @@
 {
   "name": "zephyr",
   "private": true,
-  "packageManager": "pnpm@10.34.5",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
-    "build": "pnpm -r run build",
-    "test": "pnpm --filter @zephyr/domain test",
-    "dev:api": "pnpm --filter @zephyr/api dev",
-    "dev:worker": "pnpm --filter @zephyr/worker dev",
-    "dev:web": "pnpm --filter @zephyr/web dev",
-    "typecheck": "pnpm -r run typecheck"
+    "build": "bun run --filter @zephyr/domain build && bun run --filter @zephyr/server build && bun run --filter @zephyr/api build && bun run --filter @zephyr/worker build && bun run --filter @zephyr/web build",
+    "test": "bun run --filter @zephyr/domain test",
+    "dev:api": "bun run --filter @zephyr/api dev",
+    "dev:worker": "bun run --filter @zephyr/worker dev",
+    "dev:web": "bun run --filter @zephyr/web dev",
+    "typecheck": "bun run --filter @zephyr/domain typecheck && bun run --filter @zephyr/server typecheck && bun run --filter @zephyr/api typecheck && bun run --filter @zephyr/worker typecheck && bun run --filter @zephyr/web typecheck"
   },
   "engines": {
-    "node": ">=22.18"
+    "bun": ">=1.2"
   },
-  "pnpm": {
-    "onlyBuiltDependencies": ["esbuild"]
-  }
+  "trustedDependencies": ["esbuild"]
 }

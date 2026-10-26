@@ -2,7 +2,7 @@ import { config as loadEnv } from "dotenv";
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { newId, processReportMessage, runTick, deliverPendingTasks, syncState, openStore, resolveFromRoot } from "@zephyr/server";
+import { newId, processReportMessage, runTick, deliverPendingTasks, syncState, openStore, resolveFromRoot, resolveListenPort } from "@zephyr/server";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = process.env.ZEPHYR_ROOT ?? path.resolve(__dirname, "../../..");
@@ -10,7 +10,7 @@ loadEnv({ path: path.join(ROOT, ".env.local") });
 loadEnv({ path: path.join(ROOT, ".env") });
 const DATA = resolveFromRoot(ROOT, process.env.ZEPHYR_DATA_DIR, path.join(ROOT, ".data"));
 const FIXTURES = resolveFromRoot(ROOT, process.env.ZEPHYR_FIXTURES, path.join(ROOT, "fixtures"));
-const PORT = Number(process.env.PORT ?? 8081);
+const PORT = resolveListenPort("worker");
 
 const store = await openStore(DATA);
 const app = express();

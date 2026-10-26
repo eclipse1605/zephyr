@@ -24,7 +24,7 @@
   --text: var(--ink);
   --panel: var(--surface);
   --control: #ffffff;
-  --nav-bg: rgba(251, 251, 247, 0.88);
+  --nav-bg: #fbfbf7;
   --glow: rgba(200, 233, 176, 0.35);
   --grid-line: rgba(16, 26, 21, 0.04);
   font-family: Inter, "Segoe UI", system-ui, sans-serif;
@@ -80,7 +80,6 @@ a:hover { text-decoration: underline; }
   border-radius: var(--radius);
   background: var(--nav-bg);
   box-shadow: 0 8px 24px -16px rgba(16, 26, 21, 0.45);
-  backdrop-filter: blur(16px) saturate(1.3);
 }
 
 .brand { display: flex; align-items: center; gap: 10px; color: inherit; text-decoration: none; }
@@ -381,7 +380,7 @@ td.tone-good, td.tone-sat, td.tone-mod, td.tone-poor, td.tone-vp, td.tone-severe
   --vp: #ff8a5a;
   --severe: #ff8d86;
   --control: #1c2620;
-  --nav-bg: rgba(18, 26, 22, 0.92);
+  --nav-bg: #121a16;
   --glow: rgba(47, 143, 78, 0.18);
   --grid-line: rgba(238, 243, 238, 0.05);
 }

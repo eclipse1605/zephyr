@@ -14,14 +14,13 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx --test tests/**/*.test.ts"
+    "test": "bun test tests"
   },
   "dependencies": {
     "h3-js": "^4.5.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
-    "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }
 }

@@ -17,18 +17,18 @@ Community air quality and environmental health dashboard: citizen reports, stati
 ## Local development
 
 ```bash
-pnpm install
-pnpm --filter @zephyr/domain test
-pnpm --filter @zephyr/domain build && pnpm --filter @zephyr/server build
+bun install
+bun test
+bun run build
 
 # terminal 1
-pnpm --filter @zephyr/worker dev
+bun run dev:worker
 
 # terminal 2
-pnpm --filter @zephyr/api dev
+bun run dev:api
 
 # terminal 3
-pnpm --filter @zephyr/web dev
+bun run dev:web
 ```
 
 Copy `.env.example` to `.env` and `.env.local` (both gitignored) and fill in the keys. API and worker load them via dotenv. Prefer `ZEPHYR_DATA_DIR=/tmp/zephyr-data` when the repo lives on a slow disk.

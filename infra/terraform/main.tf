@@ -25,7 +25,7 @@ resource "google_project_service" "apis" {
 }
 
 resource "google_storage_bucket" "data" {
-  name                        = "${var.name_prefix}-${var.project_id}-data"
+  name                        = "${var.project_id}-data"
   location                    = var.region
   uniform_bucket_level_access = true
   force_destroy               = false
@@ -34,7 +34,7 @@ resource "google_storage_bucket" "data" {
 }
 
 resource "google_storage_bucket" "web" {
-  name                        = "${var.name_prefix}-${var.project_id}-web"
+  name                        = "${var.project_id}-web"
   location                    = var.region
   uniform_bucket_level_access = true
   force_destroy               = true

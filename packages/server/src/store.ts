@@ -172,7 +172,7 @@ export type IncidentEvent = {
   h3: string;
 };
 
-type Db = {
+export type Db = {
   stations: Record<string, StoredStation>;
   citySummaries: Record<string, CitySummary>;
   wards: Record<string, StoredWard>;
@@ -268,9 +268,11 @@ export class FileStore {
     const raw = await readFile(this.dbPath(), "utf8");
     const parsed = JSON.parse(raw) as Partial<Db>;
     const base = emptyDb();
+    const fileReports = await this.readReportsFile();
     return {
       ...base,
       ...parsed,
+      reports: { ...(parsed.reports ?? {}), ...fileReports },
       ingest: { ...base.ingest, ...parsed.ingest },
       config: { ...base.config, ...parsed.config },
       satelliteCells: parsed.satelliteCells ?? {},
@@ -284,6 +286,31 @@ export class FileStore {
     };
   }
 
+  private reportsPath() {
+    return path.join(this.root, "reports.json");
+  }
+
+  private async readReportsFile(): Promise<Record<string, StoredReport>> {
+    try {
+      return JSON.parse(await readFile(this.reportsPath(), "utf8")) as Record<string, StoredReport>;
+    } catch {
+      return {};
+    }
+  }
+
+  private async writeReportsFile(reports: Record<string, StoredReport>) {
+    await mkdir(this.root, { recursive: true });
+    const target = this.reportsPath();
+    const tmp = `${target}.${process.pid}.${Date.now()}.tmp`;
+    try {
+      await writeFile(tmp, JSON.stringify(reports));
+      await rename(tmp, target);
+    } catch (err) {
+      await unlink(tmp).catch(() => {});
+      throw err;
+    }
+  }
+
   async write(db: Db) {
     await mkdir(this.root, { recursive: true });
     const target = this.dbPath();
@@ -291,6 +318,7 @@ export class FileStore {
     try {
       await writeFile(tmp, JSON.stringify(db, null, 2));
       await rename(tmp, target);
+      await this.writeReportsFile(db.reports);
     } catch (err) {
       await unlink(tmp).catch(() => {});
       throw err;
@@ -302,6 +330,37 @@ export class FileStore {
     await fn(db);
     await this.write(db);
     return db;
+  }
+
+  /** Persist one report without rewriting stations, wards, or other collections. */
+  async saveReport(report: StoredReport): Promise<void> {
+    await this.ensure();
+    const reports = await this.readReportsFile();
+    if (Object.keys(reports).length === 0) {
+      try {
+        const raw = JSON.parse(await readFile(this.dbPath(), "utf8")) as Partial<Db>;
+        Object.assign(reports, raw.reports ?? {});
+      } catch {
+        // empty store
+      }
+    }
+    reports[report.id] = report;
+    await this.writeReportsFile(reports);
+  }
+
+  async pushPendingMessage(message: { id: string; type: string; body: unknown }): Promise<void> {
+    await this.ensure();
+    const raw = JSON.parse(await readFile(this.dbPath(), "utf8")) as Partial<Db>;
+    const pending = [...(raw.pendingMessages ?? []), message];
+    const target = this.dbPath();
+    const tmp = `${target}.${process.pid}.${Date.now()}.tmp`;
+    try {
+      await writeFile(tmp, JSON.stringify({ ...raw, pendingMessages: pending }, null, 2));
+      await rename(tmp, target);
+    } catch (err) {
+      await unlink(tmp).catch(() => {});
+      throw err;
+    }
   }
 
   photoPath(reportId: string) {

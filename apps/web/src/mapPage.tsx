@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { cellToLatLng, latLngToCell } from "h3-js";
-import maplibregl from "maplibre-gl";
+import type * as MapLibre from "maplibre-gl";
 import { api, type City, type MapIncident, type Station } from "./api";
 import { t } from "./i18n";
 import { useLang } from "./lang";
@@ -111,7 +111,7 @@ function ringOffset(index: number, count: number): [number, number] {
   return [radius * Math.sin(theta), -radius * Math.cos(theta)];
 }
 
-function liveOffsets(map: maplibregl.Map, stations: Station[]): Map<Station, [number, number]> {
+function liveOffsets(map: MapLibre.Map, stations: Station[]): Map<Station, [number, number]> {
   const live = stations.filter((station) => !isOffline(station));
   const points = live.map((station) => map.project([station.lng, station.lat]));
   const parent = live.map((_, index) => index);
@@ -188,8 +188,9 @@ function placeIncident(
 export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) {
   const lang = useLang();
   const mapRef = useRef<HTMLDivElement>(null);
-  const mapObj = useRef<maplibregl.Map | null>(null);
-  const markers = useRef<maplibregl.Marker[]>([]);
+  const ml = useRef<typeof import("maplibre-gl") | null>(null);
+  const mapObj = useRef<MapLibre.Map | null>(null);
+  const markers = useRef<MapLibre.Marker[]>([]);
   const navigate = useNavigate();
   const [pitched, setPitched] = useState(false);
   const [mapEpoch, setMapEpoch] = useState(0);
@@ -214,23 +215,29 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
 
   useEffect(() => {
     if (!mapRef.current || !city) return;
-    const map = new maplibregl.Map({
-      container: mapRef.current,
-      style: mapStyleUrl(),
-      center: [city.center.lng, city.center.lat],
-      zoom: 10,
-    });
-    map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
-    mapObj.current = map;
+    const container = mapRef.current;
     let alive = true;
-    map.on("style.load", () => {
-      if (alive) setMapEpoch((n) => n + 1);
+    let map: MapLibre.Map | null = null;
+    void import("maplibre-gl").then((maplibregl) => {
+      if (!alive) return;
+      ml.current = maplibregl;
+      map = new maplibregl.Map({
+        container,
+        style: mapStyleUrl(),
+        center: [city.center.lng, city.center.lat],
+        zoom: 10,
+      });
+      map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
+      mapObj.current = map;
+      map.on("style.load", () => {
+        if (alive) setMapEpoch((n) => n + 1);
+      });
     });
     return () => {
       alive = false;
       markers.current.forEach((m) => m.remove());
       markers.current = [];
-      map.remove();
+      map?.remove();
       mapObj.current = null;
     };
   }, [city]);
@@ -256,7 +263,8 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
 
   useEffect(() => {
     const map = mapObj.current;
-    if (!map || mapEpoch === 0) return;
+    const maplibregl = ml.current;
+    if (!map || !maplibregl || mapEpoch === 0) return;
     let cancelled = false;
     let payload: MapPayload | null = null;
     setMapNote("loading");

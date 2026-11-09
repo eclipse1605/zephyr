@@ -62,7 +62,7 @@ const PORT = resolveListenPort("api");
 
 const store = await openStore(DATA);
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
-const app = express();
+export const app = express();
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: true }));
@@ -848,6 +848,8 @@ app.use("/api/v1", async (req, res, next) => {
 app.use("/api/v1", v1);
 
 await store.ensure();
-app.listen(PORT, () => {
-  console.log(`zephyr api listening on :${PORT}`);
-});
+if (process.env.ZEPHYR_NO_LISTEN !== "1") {
+  app.listen(PORT, () => {
+    console.log(`zephyr api listening on :${PORT}`);
+  });
+}

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Route, Routes, useLocation } from "react-router-dom";
-import { ApiError, api, loadAuth, saveAuth, type Auth, type City } from "./api";
+import { ApiError, api, emulatorPassword, loadAuth, saveAuth, type Auth, type City } from "./api";
 import { DiaryPage, OperatorPage, PipelinePage, ReportPage, TrackPage, ZonePage } from "./flows";
 import { Home } from "./home";
 import { LANGUAGES, langForCity } from "./i18n";
@@ -51,6 +51,12 @@ function useAuth() {
     setAuth(session);
     void syncAuthOperator(session).then(setAuth);
   };
+  const loginToken = (email: string, token: string) => {
+    const session: Auth = { email, operator: false, token };
+    saveAuth(session);
+    setAuth(session);
+    void syncAuthOperator(session).then(setAuth);
+  };
   const logout = () => {
     saveAuth(null);
     setAuth(null);
@@ -62,14 +68,15 @@ function useAuth() {
       setAuth((current) => (current?.token === next.token ? next : current));
     });
   }, []);
-  return { auth, login, logout };
+  return { auth, login, loginToken, logout };
 }
 
 export function App() {
-  const { auth, login, logout } = useAuth();
+  const { auth, login, loginToken, logout } = useAuth();
   const location = useLocation();
   const [cities, setCities] = useState<City[]>([]);
   const [devAuth, setDevAuth] = useState(false);
+  const [authEmulator, setAuthEmulator] = useState<string | null>(null);
   const [cityId, setCityId] = useState("delhi");
   const savedLang = () => {
     const saved = localStorage.getItem("zephyr.lang");
@@ -83,7 +90,13 @@ export function App() {
 
   useEffect(() => {
     api.cities().then((r) => setCities(r.cities)).catch(() => setCities([]));
-    api.health().then((health) => setDevAuth(health.devAuth === true)).catch(() => setDevAuth(false));
+    api.health().then((health) => {
+      setDevAuth(health.devAuth === true);
+      setAuthEmulator(health.authEmulator ?? null);
+    }).catch(() => {
+      setDevAuth(false);
+      setAuthEmulator(null);
+    });
   }, []);
 
   const cityList = useMemo(
@@ -93,7 +106,18 @@ export function App() {
 
   return (
     <LangContext.Provider value={{ lang, setLang }}>
-      <Shell cities={cityList} cityId={cityId} setCityId={setCityId} auth={auth} login={login} logout={logout} devAuth={devAuth}>
+      <Shell
+        cities={cityList}
+        cityId={cityId}
+        setCityId={setCityId}
+        auth={auth}
+        login={login}
+        loginToken={loginToken}
+        logout={logout}
+        devAuth={devAuth}
+        authEmulator={authEmulator}
+        emulatorSignIn={(email, password) => emulatorPassword(authEmulator ?? "", email, password)}
+      >
         <Routes>
           <Route path="/" element={<Home cityId={cityId} cityName={cityList.find((city) => city.id === cityId)?.name ?? ""} />} />
           <Route path="/map" element={<MapPage cityId={cityId} cities={cityList} />} />

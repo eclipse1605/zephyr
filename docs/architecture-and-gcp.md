@@ -90,7 +90,7 @@ Rate limits exist on report create (10 per IP per hour) and on public API keys (
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------- |
 | `POST /internal/tick`           | Ingest stations, fuse evidence, promote incidents, send pending notifications, sync optional BigQuery rows |
 | `POST /internal/catalog`        | Confirms the monitored set is the twelve cities. It does not download a world catalog                      |
-| `POST /internal/wind`           | Reserved for the wind field. It does not fetch a grid yet                                                   |
+| `POST /internal/wind`           | Writes a 10 m U/V grid into object storage (or the data dir). Uses the sample grid when the live fetch fails |
 | `POST /internal/pubsub/reports` | Decode a Pub/Sub push and classify the report                                                              |
 | `POST /internal/pubsub/dlq`     | Record a dead-lettered payload                                                                             |
 | `POST /internal/tasks/notify`   | Log a Cloud Tasks delivery                                                                                 |
@@ -177,7 +177,7 @@ There is no remote state backend. Do not run `terraform apply` on the empty proj
 | API and worker | Cloud Run. The API is public. The worker is internal. |
 | Compose tick | Cloud Scheduler `zephyr-tick` every 30 minutes, `POST /internal/tick`. |
 | Catalog | Cloud Scheduler `zephyr-catalog` hourly, `POST /internal/catalog`. The handler keeps the twelve-city list. |
-| Wind | Cloud Scheduler `zephyr-wind` every 6 hours, `POST /internal/wind`. The handler does not draw a field yet. |
+| Wind | Cloud Scheduler `zephyr-wind` every 6 hours, `POST /internal/wind`. The worker stores a 10 m U/V grid. The map reads it. |
 | Ingest dead letters | Pub/Sub DLQ topic, push subscription, and publisher/subscriber IAM for the Pub/Sub service agent. |
 | API keys | Secret Manager shells. They are not mounted until a version exists. The database URL is the exception. |
 

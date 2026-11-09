@@ -76,6 +76,7 @@ function defaults(): Db {
     modelledHistory: [],
     sensorStreak: {},
     users: {},
+    surfaceCells: {},
   };
 }
 

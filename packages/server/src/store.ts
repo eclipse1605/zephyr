@@ -198,6 +198,16 @@ type Db = {
   modelledHistory: Array<{ stationId: string; at: string; pm25: number }>;
   sensorStreak: Record<string, number>;
   users: Record<string, { uid: string; email: string; role: "resident" | "operator" }>;
+  surfaceCells: Record<string, {
+    h3: string;
+    cityId: string;
+    stationAqi: number | null;
+    modelAqi: number | null;
+    reportCount: number;
+    publishedAqi: number | null;
+    basis: "station" | "reports" | "model";
+    computedAt: string;
+  }>;
 };
 
 export const emptyDb = (): Db => ({
@@ -232,6 +242,7 @@ export const emptyDb = (): Db => ({
   modelledHistory: [],
   sensorStreak: {},
   users: {},
+  surfaceCells: {},
 });
 
 export class FileStore {
@@ -269,6 +280,7 @@ export class FileStore {
       modelledHistory: parsed.modelledHistory ?? [],
       sensorStreak: parsed.sensorStreak ?? {},
       users: parsed.users ?? {},
+      surfaceCells: parsed.surfaceCells ?? {},
     };
   }
 

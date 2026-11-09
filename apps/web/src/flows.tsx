@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { latLngToCell } from "h3-js";
-import maplibregl from "maplibre-gl";
+import type * as MapLibre from "maplibre-gl";
 import {
   api,
   type Auth,
@@ -915,8 +915,8 @@ export function ReportPage({ cityId, cities, auth }: { cityId: string; cities: C
   const [locating, setLocating] = useState(false);
   const [locationError, setLocationError] = useState(false);
   const mapRef = useRef<HTMLDivElement>(null);
-  const mapObj = useRef<maplibregl.Map | null>(null);
-  const markerRef = useRef<maplibregl.Marker | null>(null);
+  const mapObj = useRef<MapLibre.Map | null>(null);
+  const markerRef = useRef<MapLibre.Marker | null>(null);
 
   useEffect(() => {
     if (!city) return;
@@ -929,38 +929,47 @@ export function ReportPage({ cityId, cities, auth }: { cityId: string; cities: C
     if (!el) return;
     const startLat = city?.center.lat ?? lat;
     const startLng = city?.center.lng ?? lng;
-    const map = new maplibregl.Map({
-      container: el,
-      style: mapStyleUrl(),
-      center: [startLng, startLat],
-      zoom: 12,
+    let map: MapLibre.Map | null = null;
+    let marker: MapLibre.Marker | null = null;
+    let observer: MutationObserver | null = null;
+    let cancelled = false;
+    void import("maplibre-gl").then((maplibregl) => {
+      if (cancelled) return;
+      map = new maplibregl.Map({
+        container: el,
+        style: mapStyleUrl(),
+        center: [startLng, startLat],
+        zoom: 12,
+      });
+      const pin = document.createElement("button");
+      pin.type = "button";
+      pin.className = "pin report-pin";
+      pin.setAttribute("aria-label", t(lang, "movePin"));
+      marker = new maplibregl.Marker({ element: pin, draggable: true }).setLngLat([startLng, startLat]).addTo(map);
+      marker.on("dragend", () => {
+        const next = marker?.getLngLat();
+        if (!next) return;
+        setLocationError(false);
+        setLat(next.lat);
+        setLng(next.lng);
+      });
+      mapObj.current = map;
+      markerRef.current = marker;
+      const root = document.documentElement;
+      let current = mapStyleUrl();
+      observer = new MutationObserver(() => {
+        const next = mapStyleUrl();
+        if (next === current) return;
+        current = next;
+        map?.setStyle(next);
+      });
+      observer.observe(root, { attributes: true, attributeFilter: ["data-theme"] });
     });
-    const pin = document.createElement("button");
-    pin.type = "button";
-    pin.className = "pin report-pin";
-    pin.setAttribute("aria-label", t(lang, "movePin"));
-    const marker = new maplibregl.Marker({ element: pin, draggable: true }).setLngLat([startLng, startLat]).addTo(map);
-    marker.on("dragend", () => {
-      const next = marker.getLngLat();
-      setLocationError(false);
-      setLat(next.lat);
-      setLng(next.lng);
-    });
-    mapObj.current = map;
-    markerRef.current = marker;
-    const root = document.documentElement;
-    let current = mapStyleUrl();
-    const observer = new MutationObserver(() => {
-      const next = mapStyleUrl();
-      if (next === current) return;
-      current = next;
-      map.setStyle(next);
-    });
-    observer.observe(root, { attributes: true, attributeFilter: ["data-theme"] });
     return () => {
-      observer.disconnect();
-      marker.remove();
-      map.remove();
+      cancelled = true;
+      observer?.disconnect();
+      marker?.remove();
+      map?.remove();
       mapObj.current = null;
       markerRef.current = null;
     };

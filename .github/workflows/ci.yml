@@ -18,6 +18,7 @@ jobs:
           path: ~/.bun/install/cache
           key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
       - run: bun install --frozen-lockfile
+      - run: bun run --filter @zephyr/domain build && bun run --filter @zephyr/server build
       - run: bun test
       - run: bun run build
       - run: bun run typecheck

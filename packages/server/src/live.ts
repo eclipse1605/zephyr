@@ -13,6 +13,8 @@ import {
   type StationReading,
   type StationSource,
 } from "@zephyr/domain";
+import { noteOpenAq429, openAqRequestKey, takeOpenAqSlot } from "./openaqBudget.js";
+export { openAqBudgetStatus } from "./openaqBudget.js";
 
 export type FeedStatus = { source: StationSource; ok: boolean; error: string | null; count: number };
 
@@ -84,38 +86,8 @@ export function openAqConfigured(): boolean {
   return openAqApiKeys().length > 0;
 }
 
-let openAqSlots: number[] = [];
-let openAqLast429: string | null = null;
-
-export function resetOpenAqBudget() {
-  openAqSlots = [];
-  openAqLast429 = null;
-}
-
-/** One key, 60 requests per rolling minute. Extra keys are not used to multiply quota. */
-export function takeOpenAqSlot(now = Date.now(), limit = 60): boolean {
-  const cutoff = now - 60_000;
-  openAqSlots = openAqSlots.filter((at) => at > cutoff);
-  if (openAqSlots.length >= limit) return false;
-  openAqSlots.push(now);
-  return true;
-}
-
-export function openAqBudgetStatus(now = Date.now()) {
-  const cutoff = now - 60_000;
-  return {
-    used: openAqSlots.filter((at) => at > cutoff).length,
-    limit: 60,
-    last429: openAqLast429,
-  };
-}
-
-export function openAqRequestKey(): string | null {
-  return openAqApiKeys()[0] ?? null;
-}
-
 async function openAqGet<T>(path: string): Promise<T> {
-  const key = openAqRequestKey();
+  const key = openAqRequestKey(openAqApiKeys());
   if (!key) throw new Error("OPENAQ_API_KEY not configured");
   if (!takeOpenAqSlot()) throw new Error("OpenAQ budget");
 
@@ -125,7 +97,7 @@ async function openAqGet<T>(path: string): Promise<T> {
   });
   if (res.status === 429) {
     const retry = res.headers.get("retry-after");
-    openAqLast429 = new Date().toISOString();
+    noteOpenAq429();
     throw new Error(retry ? `OpenAQ 429 retry-after ${retry}` : "OpenAQ 429");
   }
   if (!res.ok) throw new Error(`OpenAQ ${res.status}`);

@@ -20,22 +20,13 @@ Upgrade work for the worldwide map, wind, world ingest, and cloud mapping goes o
 
 ```bash
 bun install
-bun test
-bun run build
-
-# terminal 1
-bun run dev:worker
-
-# terminal 2
-bun run dev:api
-
-# terminal 3
-bun run dev:web
+cp .env.example .env
+bun run dev
 ```
 
-Copy `.env.example` to `.env` and `.env.local` (both gitignored) and fill in the keys. API and worker load them via dotenv. Prefer `ZEPHYR_DATA_DIR=/tmp/zephyr-data` when the repo lives on a slow disk.
+That starts the worker on :8081, the API on :8080, and the web app on :5173. Open http://127.0.0.1:5173. Demo fixtures load on worker startup. The home page can load a city summary after that first tick.
 
-Open http://localhost:5173. Sign in as **Resident** or **Operator** (use an email listed in `OPERATOR_EMAILS`). Demo fixtures load on worker startup.
+Copy `.env.example` to `.env.local` as well if you want local overrides. Both files are gitignored. API and worker load them via dotenv. Prefer `ZEPHYR_DATA_DIR=/tmp/zephyr-data` when the repo lives on a slow disk.
 
 ### Auth (local)
 
@@ -47,7 +38,7 @@ Open http://localhost:5173. Sign in as **Resident** or **Operator** (use an emai
 ```bash
 curl localhost:8080/api/v1/health
 curl localhost:8080/api/v1/cities/delhi/summary
-curl -X POST localhost:8081/internal/tick
+curl -H "Authorization: Bearer $CRON_SECRET" -X POST localhost:8081/internal/tick
 ```
 
 ## Docker

@@ -1380,7 +1380,7 @@ export function ZonePage({ cityId, auth, login }: { cityId: string; auth: Auth |
   const distance =
     zone.distanceKm == null
       ? null
-      : `${station?.name ?? t(lang, "nearest")} · ${t(lang, "aqi")} ${station?.aqi ?? "—"} · ${zone.distanceKm.toFixed(1)} ${t(lang, "km")}`;
+      : `${station?.name ?? t(lang, "nearest")} · ${t(lang, "aqi")} ${station?.aqi ?? "—"} · ${zone.distanceKm.toFixed(1)} ${t(lang, "km")}${station?.sourceFeed ? ` · ${sourceLabel(lang, station.sourceFeed)}` : ""}`;
   const upwind = (zone.incidents ?? []).flatMap((i) => i.upwind ?? []);
   const advisory = zone.advisory;
   const missingSatellite = satelliteAbsent(zone) || satelliteAbsent(health);

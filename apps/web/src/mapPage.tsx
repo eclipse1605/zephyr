@@ -6,7 +6,7 @@ import { api, type City, type MapIncident, type Station } from "./api";
 import { t } from "./i18n";
 import { useLang } from "./lang";
 import { mapStyleUrl, retryLabel } from "./mapStyle";
-import { enumText } from "./flows";
+import { enumText, sourceLabel } from "./flows";
 import { aqiTone, PageHead } from "./uiBits";
 import "./map.css";
 const OFFLINE_ZOOM = 12;
@@ -311,7 +311,8 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
           const zone = `<br/><a href="/zones/${esc(cell)}">${esc(t(lang, "zoneLink"))}</a>`;
           const aqiText = offline ? esc(t(lang, "offline")) : String(Math.round(s.aqi ?? 0));
           const staleLine = readingsStale ? `<br/>${esc(staleLive(lang))}` : "";
-          const popup = `<strong>${esc(s.name)}</strong><br/>${esc(t(lang, "aqi"))} ${aqiText}${staleLine}${zone}`;
+          const sourceLine = s.sourceFeed ? `<br/>${esc(sourceLabel(lang, s.sourceFeed))}` : "";
+          const popup = `<strong>${esc(s.name)}</strong><br/>${esc(t(lang, "aqi"))} ${aqiText}${sourceLine}${staleLine}${zone}`;
           place(el, s.lng, s.lat, popup, offline ? undefined : offsets.get(s));
         }
         const incident = incidentPoint(s);

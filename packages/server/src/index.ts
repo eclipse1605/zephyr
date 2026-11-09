@@ -5,4 +5,5 @@ export * from "./gemini.js";
 export * from "./live.js";
 export * from "./gcp.js";
 export * from "./util.js";
+export * from "./uploads.js";
 export { openStore } from "./gcpStore.js";

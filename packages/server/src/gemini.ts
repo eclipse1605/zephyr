@@ -1,4 +1,5 @@
 import type { HazardType } from "@zephyr/domain";
+import { sniffImage } from "./uploads.js";
 
 export type Classification = {
   hazardType: HazardType;
@@ -8,16 +9,23 @@ export type Classification = {
   source: "gemini" | "heuristic";
 };
 
-/** Gemini when GEMINI_API_KEY is set; otherwise a deterministic heuristic. */
+const GEMINI_MODEL = () => process.env.GEMINI_MODEL?.trim() || "gemini-3.8-flash";
+
+export function countsAsEvidence(classification: Classification): boolean {
+  return classification.source === "gemini" && classification.authenticityFlags.length === 0;
+}
+
+/** Gemini when GEMINI_API_KEY is set; otherwise a deterministic heuristic that never clears authenticity. */
 export async function classifyPhoto(bytes: Buffer, hint: HazardType): Promise<Classification> {
-  const key = process.env.GEMINI_API_KEY;
-  if (!key) {
-    return heuristic(bytes, hint);
-  }
+  if (!sniffImage(bytes)) return heuristic(hint, ["undecodable"]);
+  const key = process.env.GEMINI_API_KEY?.trim();
+  if (!key) return heuristic(hint, ["heuristic"]);
+  const model = GEMINI_MODEL();
+  const started = Date.now();
   try {
     const b64 = bytes.toString("base64");
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${key}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -36,28 +44,35 @@ export async function classifyPhoto(bytes: Buffer, hint: HazardType): Promise<Cl
         signal: AbortSignal.timeout(20_000),
       },
     );
-    if (!res.ok) return heuristic(bytes, hint);
+    if (!res.ok) {
+      console.info(JSON.stringify({ event: "classify_photo", model, ms: Date.now() - started, fallback: `http_${res.status}` }));
+      return heuristic(hint, ["gemini_unavailable"]);
+    }
     const body = (await res.json()) as {
       candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
     };
     const text = body.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
     const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return heuristic(bytes, hint);
+    if (!jsonMatch) {
+      console.info(JSON.stringify({ event: "classify_photo", model, ms: Date.now() - started, fallback: "unparsed" }));
+      return heuristic(hint, ["gemini_unavailable"]);
+    }
     const parsed = JSON.parse(jsonMatch[0]) as Classification;
-    return { ...parsed, source: "gemini" };
-  } catch {
-    return heuristic(bytes, hint);
+    const flags = Array.isArray(parsed.authenticityFlags) ? parsed.authenticityFlags : [];
+    console.info(JSON.stringify({ event: "classify_photo", model, ms: Date.now() - started, fallback: null }));
+    return { ...parsed, authenticityFlags: flags, source: "gemini" };
+  } catch (err) {
+    const reason = err instanceof Error ? err.name : "error";
+    console.info(JSON.stringify({ event: "classify_photo", model, ms: Date.now() - started, fallback: reason }));
+    return heuristic(hint, ["gemini_unavailable"]);
   }
 }
 
-function heuristic(bytes: Buffer, hint: HazardType): Classification {
-  const flags: string[] = [];
-  // Tiny heuristic: very small files often screenshots/placeholders
-  if (bytes.length < 8_000) flags.push("screenshot");
+function heuristic(hint: HazardType, flags: string[]): Classification {
   return {
     hazardType: hint,
-    severity: flags.length ? "low" : "medium",
-    confidence: flags.length ? 0.35 : 0.7,
+    severity: "low",
+    confidence: 0.35,
     authenticityFlags: flags,
     source: "heuristic",
   };
@@ -69,7 +84,7 @@ export async function generateZoneBrief(evidence: Record<string, unknown>, lang:
   if (!key) return fallback;
   try {
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${key}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL()}:generateContent?key=${key}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -106,7 +121,7 @@ export type WorkOrderDraft = {
   source: "gemini" | "fallback";
 };
 
-const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent";
+const geminiUrl = () => `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL()}:generateContent`;
 
 function priorityFromAqi(aqi: number | null): WorkOrderDraft["priority"] {
   const value = aqi ?? 0;
@@ -135,7 +150,7 @@ export async function draftWorkOrder(evidence: {
   const key = process.env.GEMINI_API_KEY?.trim();
   if (!key) return fallback;
   try {
-    const res = await fetch(`${GEMINI_URL}?key=${key}`, {
+    const res = await fetch(`${geminiUrl()}?key=${key}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -242,7 +257,7 @@ export async function runCopilot(
 
   try {
     for (let round = 0; round < 4; round++) {
-      const res = await fetch(`${GEMINI_URL}?key=${key}`, {
+      const res = await fetch(`${geminiUrl()}?key=${key}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

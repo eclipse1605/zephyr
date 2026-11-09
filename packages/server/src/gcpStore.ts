@@ -77,6 +77,7 @@ function defaults(): Db {
     sensorStreak: {},
     users: {},
     surfaceCells: {},
+    ingestJobs: {},
   };
 }
 

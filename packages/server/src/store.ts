@@ -199,7 +199,7 @@ type Db = {
   sensorStreak: Record<string, number>;
 };
 
-const DEFAULT_DB = (): Db => ({
+export const emptyDb = (): Db => ({
   stations: {},
   citySummaries: {},
   wards: {},
@@ -246,7 +246,7 @@ export class FileStore {
     try {
       await readFile(this.dbPath(), "utf8");
     } catch {
-      await writeFile(this.dbPath(), JSON.stringify(DEFAULT_DB(), null, 2));
+      await writeFile(this.dbPath(), JSON.stringify(emptyDb(), null, 2));
     }
   }
 
@@ -254,7 +254,7 @@ export class FileStore {
     await this.ensure();
     const raw = await readFile(this.dbPath(), "utf8");
     const parsed = JSON.parse(raw) as Partial<Db>;
-    const base = DEFAULT_DB();
+    const base = emptyDb();
     return {
       ...base,
       ...parsed,

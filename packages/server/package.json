@@ -17,7 +17,9 @@
     "test": "bun test tests"
   },
   "dependencies": {
-    "@zephyr/domain": "workspace:*"
+    "@zephyr/domain": "workspace:*",
+    "minio": "^8.0.7",
+    "postgres": "^4.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

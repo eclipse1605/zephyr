@@ -120,6 +120,7 @@ export type Classification = {
 export type ReportView = {
   report: {
     id?: string;
+    cityId?: string;
     status: string;
     h3: string;
     classification: Classification | null;
@@ -140,12 +141,13 @@ export type DiaryView = {
 
 export type OperatorIncident = {
   id: string;
+  cityId?: string;
   h3: string;
   status: string;
   reason: string;
   repeat?: boolean;
   overdue?: boolean;
-  workOrder?: { summaryEn?: string } | null;
+  workOrder?: { summaryEn?: string; summaryLocal?: string | null } | null;
 };
 
 export function loadAuth(): Auth | null {
@@ -238,9 +240,9 @@ export const api = {
   setMode: (auth: Auth, dataMode: "live" | "demo") =>
     req("/system/data-mode", { method: "POST", body: JSON.stringify({ dataMode }) }, auth),
   tick: (auth: Auth) => req<{ ok?: boolean; via?: string; mode?: string; error?: string }>("/system/tick", { method: "POST", body: "{}" }, auth),
-  copilot: (auth: Auth, question: string) =>
+  copilot: (auth: Auth, question: string, lang: string) =>
     req<{ answer: string; toolsUsed: string[] }>("/operator/copilot", {
       method: "POST",
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({ question, lang }),
     }, auth),
 };

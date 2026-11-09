@@ -11,7 +11,7 @@ import {
   openClosureWindow,
 } from "@zephyr/domain";
 import { FileStore, newId, sha256 } from "./store.js";
-import { classifyPhoto, draftWorkOrder } from "./gemini.js";
+import { classifyPhoto, countsAsEvidence, draftWorkOrder } from "./gemini.js";
 import { isRepeatHotspot } from "@zephyr/domain";
 
 export async function processReportMessage(store: FileStore, reportId: string) {
@@ -24,25 +24,20 @@ export async function processReportMessage(store: FileStore, reportId: string) {
 
   let classification: Awaited<ReturnType<typeof classifyPhoto>> | null = null;
   let visualScore: number | null = null;
-  let authenticity = { ok: true, reasons: [] as string[] };
+  let authenticity = { ok: false, reasons: ["no_photo"] as string[] };
 
   if (report.photoPath && (await store.photoExists(reportId))) {
     const bytes = await store.readPhoto(reportId);
     const hash = sha256(bytes);
     report.photoSha256 = hash;
+    const reasons: string[] = [];
     const dup = Object.values(db.reports).find(
       (r) => r.id !== reportId && r.photoSha256 === hash && Date.parse(r.createdAt) > Date.now() - 7 * 86400_000,
     );
-    if (dup) {
-      authenticity = { ok: false, reasons: ["duplicate_photo"] };
-    }
+    if (dup) reasons.push("duplicate_photo");
     classification = await classifyPhoto(bytes, report.hazardType);
-    if (classification.authenticityFlags.length) {
-      authenticity = {
-        ok: false,
-        reasons: [...authenticity.reasons, ...classification.authenticityFlags],
-      };
-    }
+    if (!countsAsEvidence(classification)) reasons.push(...classification.authenticityFlags);
+    authenticity = { ok: reasons.length === 0, reasons };
     visualScore = authenticity.ok ? Math.round(classification.confidence * 100) : null;
   }
 

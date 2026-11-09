@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile, rename, readdir, unlink, stat } from "node:fs/promises";
 import path from "node:path";
+import { containedPhotoPath } from "./uploads.js";
 import type {
   DataMode,
   IncidentStatus,
@@ -76,6 +77,7 @@ export type StoredReport = {
   ipHash: string;
   incidentId: string | null;
   closureTokenHash: string | null;
+  uploadTokenHash: string | null;
 };
 
 export type StoredIncident = {
@@ -288,12 +290,13 @@ export class FileStore {
   }
 
   photoPath(reportId: string) {
-    return path.join(this.root, "photos", reportId);
+    return containedPhotoPath(this.root, reportId);
   }
 
   async savePhoto(reportId: string, bytes: Buffer) {
     await this.ensure();
     const p = this.photoPath(reportId);
+    await mkdir(path.dirname(p), { recursive: true });
     await writeFile(p, bytes);
     return p;
   }

@@ -20,6 +20,7 @@ export type Health = {
     feeds?: Record<string, { ok: boolean; error: string | null; count: number }>;
   } | null;
   integrations: Record<string, boolean>;
+  devAuth?: boolean;
 };
 
 export type CitySummary = {
@@ -185,10 +186,10 @@ async function req<T>(path: string, init: RequestInit = {}, auth?: Auth | null):
   return res.json() as Promise<T>;
 }
 
-async function upload(path: string, field: string, file: File) {
+async function upload(path: string, field: string, file: File, token: string) {
   const fd = new FormData();
   fd.append(field, file);
-  const res = await fetch(`${API}${path}`, { method: "POST", body: fd });
+  const res = await fetch(`${API}${path}`, { method: "POST", body: fd, headers: { "x-upload-token": token } });
   if (!res.ok) {
     const err = (await res.json().catch(() => ({ error: res.statusText }))) as { error?: string };
     throw new Error(err.error ?? "upload failed");
@@ -214,13 +215,13 @@ export const api = {
     body: { cityId: string; lat: number; lng: number; hazardType: string; note: string },
     auth: Auth | null,
   ) =>
-    req<{ reportId: string; uploadUrl: string; closureToken: string; h3: string }>(
+    req<{ reportId: string; uploadUrl: string; uploadToken: string; closureToken: string; h3: string }>(
       "/reports",
       { method: "POST", body: JSON.stringify(body) },
       auth,
     ),
-  uploadPhoto: (reportId: string, file: File) => upload(`/reports/${reportId}/photo`, "photo", file),
-  uploadVoice: (reportId: string, file: File) => upload(`/reports/${reportId}/voice`, "voice", file),
+  uploadPhoto: (reportId: string, file: File, token: string) => upload(`/reports/${reportId}/photo`, "photo", file, token),
+  uploadVoice: (reportId: string, file: File, token: string) => upload(`/reports/${reportId}/voice`, "voice", file, token),
   commitReport: (reportId: string) => req<{ ok: boolean }>(`/reports/${reportId}/commit`, { method: "POST", body: "{}" }),
   getReport: (id: string) => req<ReportView>(`/reports/${encodeURIComponent(id)}`),
   closure: (id: string, token: string, answer: "FIXED" | "STILL") =>

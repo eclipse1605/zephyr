@@ -2,7 +2,7 @@ import { config as loadEnv } from "dotenv";
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { newId, processReportMessage, runTick, deliverPendingTasks, syncState, openStore, resolveFromRoot, resolveListenPort } from "@zephyr/server";
+import { newId, processReportMessage, runTick, deliverPendingTasks, syncState, openStore, resolveFromRoot, resolveListenPort, authorizeInternal } from "@zephyr/server";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = process.env.ZEPHYR_ROOT ?? path.resolve(__dirname, "../../..");
@@ -18,6 +18,17 @@ app.use(express.json({ limit: "4mb" }));
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true, service: "worker" });
+});
+
+app.use("/internal", (req, res, next) => {
+  const ok = authorizeInternal({
+    authorization: req.header("authorization"),
+    cronHeader: req.header("x-cron-secret"),
+    secret: process.env.CRON_SECRET,
+    emulator: Boolean(process.env.PUBSUB_EMULATOR_HOST?.trim()),
+  });
+  if (!ok) return res.status(401).json({ error: "unauthorized" });
+  next();
 });
 
 app.post("/internal/tick", async (_req, res) => {

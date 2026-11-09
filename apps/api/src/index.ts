@@ -42,6 +42,9 @@ import {
   openAqConfigured,
   resolveFromRoot,
   resolveListenPort,
+  takeReportId,
+  sniffImage,
+  sniffAudio,
 } from "@zephyr/server";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -135,9 +138,12 @@ async function enqueueReport(reportId: string) {
   });
   await publishReport(reportId).catch(() => false);
   try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const secret = process.env.CRON_SECRET?.trim();
+    if (secret) headers.authorization = `Bearer ${secret}`;
     await fetch(`${WORKER_URL}/internal/pubsub/reports`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify({ message: { data: Buffer.from(JSON.stringify({ reportId })).toString("base64") } }),
     });
   } catch {
@@ -170,6 +176,7 @@ v1.get("/health", async (_req, res) => {
       airQuality: Boolean(process.env.GOOGLE_AIR_QUALITY_API_KEY?.trim()),
       firebase: Boolean(process.env.FIREBASE_SERVICE_ACCOUNT_KEY?.trim()),
     },
+    devAuth: process.env.ZEPHYR_DEV_AUTH === "1",
     ingest: db.ingest,
     forecastTraining: forecastTrainingStatus(
       Math.max(0, ...Object.values(
@@ -374,9 +381,12 @@ v1.post("/reports", async (req, res) => {
   rl.count += 1;
   db.rateLimits[bucket] = rl;
 
-  const id = typeof req.body.reportId === "string" ? req.body.reportId : newId();
+  const claimed = takeReportId(db.reports, req.body?.reportId);
+  if (!claimed.ok) return res.status(claimed.status).json({ error: claimed.error });
+  const id = claimed.id;
   const user = await authUser(req);
   const token = newToken();
+  const upload = newToken();
   db.reports[id] = {
     id,
     cityId,
@@ -399,11 +409,13 @@ v1.post("/reports", async (req, res) => {
     ipHash,
     incidentId: null,
     closureTokenHash: token.hash,
+    uploadTokenHash: upload.hash,
   };
   await store.write(db);
   res.json({
     reportId: id,
     uploadUrl: `/api/v1/reports/${id}/photo`,
+    uploadToken: upload.raw,
     closureToken: token.raw,
     h3: db.reports[id]!.h3,
   });
@@ -412,10 +424,17 @@ v1.post("/reports", async (req, res) => {
 v1.post("/reports/:id/photo", upload.single("photo"), async (req, res) => {
   const id = param(req.params.id);
   const db = await store.read();
-  if (!db.reports[id]) return res.status(404).json({ error: "not_found" });
+  const report = db.reports[id];
+  if (!report) return res.status(404).json({ error: "not_found" });
+  const token = req.header("x-upload-token") ?? "";
+  if (!report.uploadTokenHash || sha256(token) !== report.uploadTokenHash) return res.status(401).json({ error: "upload_unauthorized" });
   if (!req.file) return res.status(400).json({ error: "photo_required" });
-  const p = await store.savePhoto(id, req.file.buffer);
-  db.reports[id]!.photoPath = p;
+  if (!sniffImage(req.file.buffer)) return res.status(400).json({ error: "bad_photo" });
+  try {
+    report.photoPath = await store.savePhoto(id, req.file.buffer);
+  } catch {
+    return res.status(400).json({ error: "bad_id" });
+  }
   await store.write(db);
   res.json({ ok: true });
 });
@@ -439,7 +458,7 @@ v1.get("/reports/:id", async (req, res) => {
   if (!report) return res.status(404).json({ error: "not_found" });
   const incident = report.incidentId ? db.incidents[report.incidentId] : null;
   res.json({
-    report: { ...report, closureTokenHash: undefined, ipHash: undefined },
+    report: { ...report, closureTokenHash: undefined, uploadTokenHash: undefined, ipHash: undefined },
     incident,
   });
 });
@@ -550,7 +569,7 @@ v1.delete("/me/subscriptions/:h3", async (req, res) => {
 });
 
 v1.post("/api-keys", async (req, res) => {
-  const u = await requireUser(req, res);
+  const u = await requireOperator(req, res);
   if (!u) return;
   const raw = `zph_${newToken().raw}`;
   const hash = sha256(raw);
@@ -642,10 +661,17 @@ v1.get("/cities/:cityId/fires", async (req, res) => {
 v1.post("/reports/:id/voice", upload.single("voice"), async (req, res) => {
   const id = param(req.params.id);
   const db = await store.read();
-  if (!db.reports[id]) return res.status(404).json({ error: "not_found" });
+  const report = db.reports[id];
+  if (!report) return res.status(404).json({ error: "not_found" });
+  const token = req.header("x-upload-token") ?? "";
+  if (!report.uploadTokenHash || sha256(token) !== report.uploadTokenHash) return res.status(401).json({ error: "upload_unauthorized" });
   if (!req.file) return res.status(400).json({ error: "voice_required" });
-  const p = await store.savePhoto(`${id}-voice`, req.file.buffer);
-  db.reports[id]!.voicePath = p;
+  if (!sniffAudio(req.file.buffer)) return res.status(400).json({ error: "bad_voice" });
+  try {
+    report.voicePath = await store.savePhoto(`${id}-voice`, req.file.buffer);
+  } catch {
+    return res.status(400).json({ error: "bad_id" });
+  }
   await store.write(db);
   res.json({ ok: true });
 });
@@ -687,7 +713,11 @@ v1.post("/system/data-mode", async (req, res) => {
 v1.post("/system/tick", async (req, res) => {
   if (!await requireOperator(req, res)) return;
   try {
-    await fetch(`${WORKER_URL}/internal/tick`, { method: "POST" });
+    const headers: Record<string, string> = {};
+    const secret = process.env.CRON_SECRET?.trim();
+    if (secret) headers.authorization = `Bearer ${secret}`;
+    const tick = await fetch(`${WORKER_URL}/internal/tick`, { method: "POST", headers });
+    if (!tick.ok) throw new Error("worker_rejected");
   } catch {
     const result = await runTick({ store, fixturesRoot: FIXTURES });
     return res.json(result);
@@ -711,11 +741,11 @@ v1.post("/whatsapp/inbound", async (req, res) => {
   if (text === "FIXED" || text === "STILL") {
     const secret = process.env.WHATSAPP_CLOSURE_SECRET?.trim();
     if (!secret) return res.status(400).send("closure not configured");
-    const openClosure = Object.values(db.incidents).find((i) => i.closure?.open);
-    if (!openClosure) return res.status(200).send("<Response></Response>");
-    const report = db.reports[openClosure.reportIds[0] ?? ""];
-    if (!report?.closureTokenHash) return res.status(200).send("<Response></Response>");
-    const tokenValid = sha256(`${secret}:${from}`) === report.closureTokenHash;
+    const tokenHash = sha256(`${secret}:${from}`);
+    const report = Object.values(db.reports).find((item) => item.closureTokenHash === tokenHash);
+    const openClosure = report?.incidentId ? db.incidents[report.incidentId] : undefined;
+    if (!report?.closureTokenHash || !openClosure?.closure?.open) return res.status(200).send("<Response></Response>");
+    const tokenValid = true;
     const result = applyClosureAnswer({
       closure: openClosure.closure as never,
       answer: text as "FIXED" | "STILL",
@@ -754,8 +784,8 @@ v1.post("/whatsapp/inbound", async (req, res) => {
     voicePath: null,
     status: "received",
     classification: null,
-    authenticity: { ok: true, reasons: [] },
-    countsTowardPromotion: true,
+    authenticity: { ok: false, reasons: ["no_photo"] },
+    countsTowardPromotion: false,
     createdAt: new Date().toISOString(),
     reporterUid: null,
     reporterKey: hashIp(from || "whatsapp"),
@@ -763,6 +793,7 @@ v1.post("/whatsapp/inbound", async (req, res) => {
     ipHash: hashIp(from || "whatsapp"),
     incidentId: null,
     closureTokenHash: secret ? sha256(`${secret}:${from}`) : token.hash,
+    uploadTokenHash: null,
   };
   await store.write(db);
   await enqueueReport(id);

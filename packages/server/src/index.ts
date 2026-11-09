@@ -6,4 +6,5 @@ export * from "./live.js";
 export * from "./gcp.js";
 export * from "./util.js";
 export * from "./uploads.js";
+export { PostgresStore } from "./pgStore.js";
 export { openStore } from "./gcpStore.js";

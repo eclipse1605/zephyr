@@ -70,7 +70,7 @@ HTTP contract is path-versioned under `/api/v1`. Breaking changes add `/api/v2` 
 
 ## Demo script
 
-1. Open the site (demo badge). Check people-in-Poor and an uncovered ward on the map.
+1. Open the site (demo badge). Check the city AQI and open the map.
 2. Submit a photo report → track page moves through classified / promoted.
 3. Operator queue → dispatch → resolve.
 4. Reporter answers STILL → incident returns as disputed.

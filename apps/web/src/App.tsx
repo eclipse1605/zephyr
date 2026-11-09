@@ -69,6 +69,7 @@ export function App() {
   const { auth, login, logout } = useAuth();
   const location = useLocation();
   const [cities, setCities] = useState<City[]>([]);
+  const [devAuth, setDevAuth] = useState(false);
   const [cityId, setCityId] = useState("delhi");
   const savedLang = () => {
     const saved = localStorage.getItem("zephyr.lang");
@@ -82,6 +83,7 @@ export function App() {
 
   useEffect(() => {
     api.cities().then((r) => setCities(r.cities)).catch(() => setCities([]));
+    api.health().then((health) => setDevAuth(health.devAuth === true)).catch(() => setDevAuth(false));
   }, []);
 
   const cityList = useMemo(
@@ -91,7 +93,7 @@ export function App() {
 
   return (
     <LangContext.Provider value={{ lang, setLang }}>
-      <Shell cities={cityList} cityId={cityId} setCityId={setCityId} auth={auth} login={login} logout={logout}>
+      <Shell cities={cityList} cityId={cityId} setCityId={setCityId} auth={auth} login={login} logout={logout} devAuth={devAuth}>
         <Routes>
           <Route path="/" element={<Home cityId={cityId} cityName={cityList.find((city) => city.id === cityId)?.name ?? ""} />} />
           <Route path="/map" element={<MapPage cityId={cityId} cities={cityList} />} />

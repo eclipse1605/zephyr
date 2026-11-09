@@ -7,7 +7,7 @@
   ],
   "scripts": {
     "build": "bun run --filter @zephyr/domain build && bun run --filter @zephyr/server build && bun run --filter @zephyr/api build && bun run --filter @zephyr/worker build && bun run --filter @zephyr/web build",
-    "test": "bun run --filter @zephyr/domain test",
+    "test": "bun run --filter @zephyr/domain test && bun test packages/server/tests",
     "dev:api": "bun run --filter @zephyr/api dev",
     "dev:worker": "bun run --filter @zephyr/worker dev",
     "dev:web": "bun run --filter @zephyr/web dev",

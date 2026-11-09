@@ -193,6 +193,7 @@ export function Shell({
   auth,
   login,
   logout,
+  devAuth,
   children,
 }: {
   cities: City[];
@@ -201,6 +202,7 @@ export function Shell({
   auth: Auth | null;
   login: (email: string, operator: boolean) => void;
   logout: () => void;
+  devAuth: boolean;
   children: ReactNode;
 }) {
   const { lang, setLang } = useContext(LangContext);
@@ -307,7 +309,7 @@ export function Shell({
                 {t(lang, "signOut")}
               </button>
             </div>
-          ) : (
+          ) : devAuth ? (
             <div className="account">
               <button type="button" className="primary" onClick={() => login("resident@zephyr.local", false)}>
                 {t(lang, "resident")}
@@ -316,8 +318,8 @@ export function Shell({
                 {OP_OPEN[lang] ?? OP_OPEN.en}
               </button>
             </div>
-          )}
-          {open && !auth ? (
+          ) : null}
+          {devAuth && open && !auth ? (
             <form
               className="operator-login"
               onSubmit={(event) => {

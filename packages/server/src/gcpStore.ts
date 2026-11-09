@@ -1,3 +1,4 @@
+import { safeObjectId } from "./uploads.js";
 import { googleAccessToken } from "./live.js";
 import { resolveProjectId } from "./gcp.js";
 import { FileStore } from "./store.js";
@@ -295,6 +296,7 @@ export class GcpStore extends FileStore {
   }
 
   photoPath(reportId: string) {
+    if (!safeObjectId(reportId)) throw new Error("bad_id");
     const bucket = this.bucket();
     return bucket ? `gs://${bucket}/photos/${reportId}` : `photos/${reportId}`;
   }

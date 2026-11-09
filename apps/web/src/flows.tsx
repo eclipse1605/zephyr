@@ -1018,8 +1018,8 @@ export function ReportPage({ cityId, cities, auth }: { cityId: string; cities: C
       const created = await api.createReport({ cityId, lat, lng, hazardType, note }, auth);
       rememberTrack(created.reportId, { hazard: HAZARD_KEY[hazardType], city: city?.id });
       localStorage.setItem(`zephyr.closure.${created.reportId}`, created.closureToken);
-      await api.uploadPhoto(created.reportId, file);
-      if (voice) await api.uploadVoice(created.reportId, voice);
+      await api.uploadPhoto(created.reportId, file, created.uploadToken);
+      if (voice) await api.uploadVoice(created.reportId, voice, created.uploadToken);
       await api.commitReport(created.reportId);
       onPhoto(null);
       setVoice(null);

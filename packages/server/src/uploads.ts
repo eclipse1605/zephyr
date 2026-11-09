@@ -50,6 +50,89 @@ export function sniffImage(bytes: Buffer): "jpeg" | "png" | "webp" | null {
   return null;
 }
 
+/** Drop EXIF and XMP segments so a stored photo does not keep GPS. */
+export function stripImageLocation(bytes: Buffer): Buffer {
+  const kind = sniffImage(bytes);
+  if (kind === "jpeg") return stripJpegApp1(bytes);
+  if (kind === "png") return stripPngExif(bytes);
+  if (kind === "webp") return stripWebpExif(bytes);
+  return bytes;
+}
+
+function stripJpegApp1(bytes: Buffer): Buffer {
+  const out: Buffer[] = [bytes.subarray(0, 2)];
+  let i = 2;
+  while (i < bytes.length) {
+    if (bytes[i] !== 0xff) {
+      out.push(bytes.subarray(i));
+      break;
+    }
+    const markerStart = i;
+    while (i < bytes.length && bytes[i] === 0xff) i += 1;
+    if (i >= bytes.length) break;
+    const marker = bytes[i];
+    i += 1;
+    if (marker === 0x00 || marker === 0x01 || marker === 0xd9 || (marker >= 0xd0 && marker <= 0xd7)) {
+      out.push(bytes.subarray(markerStart, i));
+      if (marker === 0xd9) break;
+      continue;
+    }
+    if (i + 1 >= bytes.length) {
+      out.push(bytes.subarray(markerStart));
+      break;
+    }
+    const len = bytes.readUInt16BE(i);
+    if (len < 2 || i + len > bytes.length) {
+      out.push(bytes.subarray(markerStart));
+      break;
+    }
+    if (marker === 0xda) {
+      out.push(bytes.subarray(markerStart));
+      break;
+    }
+    if (marker !== 0xe1) out.push(bytes.subarray(markerStart, i + len));
+    i += len;
+  }
+  return Buffer.concat(out);
+}
+
+function stripPngExif(bytes: Buffer): Buffer {
+  const parts: Buffer[] = [bytes.subarray(0, 8)];
+  let i = 8;
+  while (i + 12 <= bytes.length) {
+    const len = bytes.readUInt32BE(i);
+    const type = bytes.toString("ascii", i + 4, i + 8);
+    const chunkEnd = i + 12 + len;
+    if (chunkEnd > bytes.length) {
+      parts.push(bytes.subarray(i));
+      break;
+    }
+    if (type !== "eXIf") parts.push(bytes.subarray(i, chunkEnd));
+    i = chunkEnd;
+    if (type === "IEND") break;
+  }
+  return Buffer.concat(parts);
+}
+
+function stripWebpExif(bytes: Buffer): Buffer {
+  const chunks: Buffer[] = [];
+  let i = 12;
+  while (i + 8 <= bytes.length) {
+    const fourcc = bytes.toString("ascii", i, i + 4);
+    const size = bytes.readUInt32LE(i + 4);
+    const padded = i + 8 + size + (size % 2);
+    if (i + 8 + size > bytes.length) break;
+    if (fourcc !== "EXIF" && fourcc !== "XMP ") chunks.push(bytes.subarray(i, Math.min(padded, bytes.length)));
+    i = padded;
+  }
+  const body = Buffer.concat(chunks);
+  const header = Buffer.alloc(12);
+  bytes.copy(header, 0, 0, 4);
+  header.writeUInt32LE(body.length + 4, 4);
+  bytes.copy(header, 8, 8, 12);
+  return Buffer.concat([header, body]);
+}
+
 export function sniffAudio(bytes: Buffer): boolean {
   if (bytes.length >= 4 && bytes.toString("ascii", 0, 4) === "OggS") return true;
   if (bytes.length >= 12 && bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WAVE") return true;

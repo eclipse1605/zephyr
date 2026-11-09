@@ -32,9 +32,9 @@ export type CitySummary = {
   cityAqi: number | null;
   liveStationCount: number;
   offlineStationCount: number;
-  peopleInPoor: number;
-  coveredPopulation: number;
-  uncoveredPopulation: number;
+  peopleInPoor: number | null;
+  coveredPopulation: number | null;
+  uncoveredPopulation: number | null;
   shareInPoor: number | null;
   openIncidentCount: number;
   equity: { p90: number | null; p10: number | null; ratio: number | null };

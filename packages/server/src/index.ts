@@ -10,3 +10,4 @@ export { PostgresStore } from "./pgStore.js";
 export { devSession, lookupEmulatorAccount, sessionFromAccount } from "./firebaseAuth.js";
 export { openStore } from "./gcpStore.js";
 export { cachedModelPoint, cachedModelTile, type RasterLayer } from "./modelRaster.js";
+export { readWindGrid, refreshWindGrid } from "./windGrid.js";

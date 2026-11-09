@@ -343,22 +343,6 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
         place(el, f.lng, f.lat, zone);
       }
 
-      for (const w of data.wards) {
-        if (!w.covered && w.centroid) {
-          uncoveredCount += 1;
-          const where = w.name || `${w.centroid.lat.toFixed(2)}, ${w.centroid.lng.toFixed(2)}`;
-          const label = `${where} · ${t(lang, "uncoveredWard")}`;
-          const cell = w.h3 || latLngToCell(w.centroid.lat, w.centroid.lng, 8);
-          const el = document.createElement("button");
-          el.type = "button";
-          el.className = "pin uncovered";
-          el.textContent = w.name || where;
-          el.setAttribute("aria-label", label);
-          const zone = `<br/><a href="/zones/${esc(cell)}">${esc(t(lang, "zoneLink"))}</a>`;
-          place(el, w.centroid.lng, w.centroid.lat, `<strong>${esc(label)}</strong>${zone}`);
-        }
-      }
-
       for (const incident of data.incidents) {
         if (incident.lat == null || incident.lng == null || !incident.h3) continue;
         placeIncident(place, incident, incident.lng, incident.lat, lang, navigate, seen);
@@ -474,12 +458,6 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
             <li>
               <span className="swatch swatch-incident" aria-hidden="true" />
               {t(lang, "legendIncident")}
-            </li>
-          ) : null}
-          {counts.uncovered > 0 ? (
-            <li>
-              <span className="swatch swatch-uncovered" aria-hidden="true" />
-              {t(lang, "legendUncovered")}
             </li>
           ) : null}
           {counts.offlineHidden > 0 ? (

@@ -51,6 +51,7 @@ import {
   sessionFromAccount,
   fetchLiveWaqi,
   openAqBudgetStatus,
+  internalAuthHeaders,
 } from "@zephyr/server";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -161,9 +162,7 @@ async function enqueueReport(reportId: string) {
   });
   await publishReport(reportId).catch(() => false);
   try {
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    const secret = process.env.CRON_SECRET?.trim();
-    if (secret) headers.authorization = `Bearer ${secret}`;
+    const headers: Record<string, string> = { "Content-Type": "application/json", ...(await internalAuthHeaders(WORKER_URL)) };
     await fetch(`${WORKER_URL}/internal/pubsub/reports`, {
       method: "POST",
       headers,
@@ -749,9 +748,7 @@ v1.post("/system/data-mode", async (req, res) => {
 v1.post("/system/tick", async (req, res) => {
   if (!await requireOperator(req, res)) return;
   try {
-    const headers: Record<string, string> = {};
-    const secret = process.env.CRON_SECRET?.trim();
-    if (secret) headers.authorization = `Bearer ${secret}`;
+    const headers = await internalAuthHeaders(WORKER_URL);
     const tick = await fetch(`${WORKER_URL}/internal/tick`, { method: "POST", headers });
     if (!tick.ok) throw new Error("worker_rejected");
   } catch {

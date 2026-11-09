@@ -2,6 +2,8 @@
 
 Community air quality and environmental health dashboard: citizen reports, station readings, neighbourhood hotspots, ward burden, group advisories, exposure diary, subscriptions, equity ranking, a public API, and dead-letter replay.
 
+Upgrade work for the worldwide map, wind, world ingest, and cloud mapping goes on `upgrade/worldwide-earth`, which includes `gcp-terraform` and the current `main`. Security fixes stay on `main`.
+
 ## Layout
 
 | Path | Role |

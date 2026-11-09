@@ -60,6 +60,8 @@ const PARTIAL_NOTE: Record<string, string> = {
   pt: "Algumas camadas não carregaram",
 };
 
+const SOURCE_LINE = "Stations: OpenAQ and CPCB are stored. WAQI is shown live and is not stored. Google air quality is not drawn on this map.";
+
 function layerName(lang: string, id: "stations" | "wards" | "fires"): string {
   return LAYER_NAME[id][lang] ?? LAYER_NAME[id].en;
 }
@@ -421,6 +423,7 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
           {pitched ? t(lang, "flat") : t(lang, "buildings")}
         </button>
       </PageHead>
+      <p className="muted map-sources">{SOURCE_LINE}</p>
       <div className="map-frame">
         <div id="map" ref={mapRef} />
         {mapNote ? (

@@ -44,6 +44,7 @@ import {
   resolveListenPort,
   takeReportId,
   sniffImage,
+  stripImageLocation,
   sniffAudio,
   devSession,
   lookupEmulatorAccount,
@@ -463,8 +464,10 @@ v1.post("/reports/:id/photo", upload.single("photo"), async (req, res) => {
   if (!report.uploadTokenHash || sha256(token) !== report.uploadTokenHash) return res.status(401).json({ error: "upload_unauthorized" });
   if (!req.file) return res.status(400).json({ error: "photo_required" });
   if (!sniffImage(req.file.buffer)) return res.status(400).json({ error: "bad_photo" });
+  const photo = stripImageLocation(req.file.buffer);
+  if (!sniffImage(photo)) return res.status(400).json({ error: "bad_photo" });
   try {
-    report.photoPath = await store.savePhoto(id, req.file.buffer);
+    report.photoPath = await store.savePhoto(id, photo);
   } catch {
     return res.status(400).json({ error: "bad_id" });
   }

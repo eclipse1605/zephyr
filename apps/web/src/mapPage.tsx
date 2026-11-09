@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { latLngToCell } from "h3-js";
 import maplibregl from "maplibre-gl";
 import { api, type City, type MapIncident, type Station } from "./api";
 import { t } from "./i18n";
 import { useLang } from "./lang";
+import { mapStyleUrl, retryLabel } from "./mapStyle";
+import { enumText } from "./flows";
 import { aqiTone, PageHead } from "./uiBits";
 import "./map.css";
-
-const MAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
 const OFFLINE_ZOOM = 12;
 const NEAR_PX = 40;
 
@@ -27,6 +28,7 @@ const EMPTY_COUNTS: LegendCounts = { live: 0, offline: 0, fire: 0, incident: 0, 
 type MapPayload = {
   stations: Station[];
   wards: Array<{
+    name?: string;
     covered: boolean;
     centroid?: { lat: number; lng: number } | null;
     h3?: string;
@@ -35,6 +37,31 @@ type MapPayload = {
   fires: Array<{ lat: number; lng: number; h3?: string }>;
   incidents: MapIncident[];
 };
+
+const LAYER_NAME: Record<"stations" | "wards" | "fires", Record<string, string>> = {
+  stations: { en: "Stations", hi: "स्टेशन", mr: "स्टेशन", bn: "স্টেশন", ta: "நிலையங்கள்", kn: "ಕೇಂದ್ರಗಳು", te: "స్టేషన్లు", zh: "站点", ru: "Станции", ar: "محطات", id: "Stasiun", pt: "Estações" },
+  wards: { en: "Wards", hi: "वार्ड", mr: "प्रभाग", bn: "ওয়ার্ড", ta: "வார்டு", kn: "ವಾರ್ಡ್", te: "వార్డులు", zh: "街区", ru: "Районы", ar: "أحياء", id: "Wilayah", pt: "Bairros" },
+  fires: { en: "Fires", hi: "आग", mr: "आग", bn: "আগুন", ta: "தீ", kn: "ಬೆಂಕಿ", te: "మంటలు", zh: "火点", ru: "Пожары", ar: "حرائق", id: "Kebakaran", pt: "Incêndios" },
+};
+
+const PARTIAL_NOTE: Record<string, string> = {
+  en: "Some layers didn’t load",
+  hi: "कुछ परतें लोड नहीं हुईं",
+  mr: "काही स्तर लोड झाले नाहीत",
+  bn: "কিছু স্তর লোড হয়নি",
+  ta: "சில அடுக்குகள் ஏறவில்லை",
+  kn: "ಕೆಲವು ಪದರಗಳು ಲೋಡ್ ಆಗಲಿಲ್ಲ",
+  te: "కొన్ని పొరలు లోడ్ కాలేదు",
+  zh: "部分图层未能加载",
+  ru: "Часть слоёв не загрузилась",
+  ar: "بعض الطبقات لم تُحمَّل",
+  id: "Sebagian lapisan gagal dimuat",
+  pt: "Algumas camadas não carregaram",
+};
+
+function layerName(lang: string, id: "stations" | "wards" | "fires"): string {
+  return LAYER_NAME[id][lang] ?? LAYER_NAME[id].en;
+}
 
 function esc(value: string): string {
   return value.replace(/[&<>"']/g, (ch) => {
@@ -46,6 +73,32 @@ function esc(value: string): string {
 function isOffline(station: Station): boolean {
   if (station.online === false) return true;
   return station.aqi == null || Number.isNaN(station.aqi);
+}
+
+const STALE_LIVE: Record<string, string> = {
+  en: "Station AQI, not confirmed current",
+  hi: "स्टेशन AQI, ताज़ा पुष्टि नहीं",
+  mr: "स्टेशन AQI, ताजेपणा निश्चित नाही",
+  bn: "স্টেশন AQI, সাম্প্রতিক নয়",
+  ta: "நிலைய AQI, தற்போதையது உறுதி இல்லை",
+  kn: "ಕೇಂದ್ರ AQI, ಪ್ರಸ್ತುತ ಎಂದು ದೃಢವಿಲ್ಲ",
+  te: "స్టేషన్ AQI, ప్రస్తుతం అని నిర్ధారణ లేదు",
+  zh: "站点 AQI，未确认为实时",
+  ru: "AQI станций, актуальность не подтверждена",
+  ar: "مؤشر المحطات، الحداثة غير مؤكدة",
+  id: "AQI stasiun, belum dipastikan terkini",
+  pt: "AQI das estações, atualidade não confirmada",
+};
+
+function staleLive(lang: string): string {
+  return STALE_LIVE[lang] ?? STALE_LIVE.en;
+}
+
+function readingIsOld(iso: string | null | undefined): boolean {
+  if (!iso) return false;
+  const at = Date.parse(iso);
+  if (Number.isNaN(at)) return false;
+  return Date.now() - at > 3 * 60 * 60 * 1000;
 }
 
 function ringOffset(index: number, count: number): [number, number] {
@@ -112,8 +165,10 @@ function placeIncident(
   const el = document.createElement("button");
   el.type = "button";
   el.className = "pin hex";
-  el.textContent = incident.status ? incident.status : incident.h3.slice(0, 6);
-  el.title = `${t(lang, "incident")} ${incident.h3}`;
+  const status = incident.status ? enumText(lang, incident.status) : t(lang, "incident");
+  el.textContent = status;
+  el.title = status;
+  el.setAttribute("aria-label", `${t(lang, "incident")}: ${status}`);
   const h3 = incident.h3;
   el.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -123,7 +178,7 @@ function placeIncident(
     el,
     lng,
     lat,
-    `<strong>${esc(t(lang, "incident"))}</strong><br/>${esc(incident.status ?? "")} <a href="/zones/${esc(h3)}">${esc(h3.slice(0, 10))}</a>`,
+    `<strong>${esc(t(lang, "incident"))}</strong><br/>${esc(incident.status ? enumText(lang, incident.status) : "")} <a href="/zones/${esc(h3)}">${esc(t(lang, "zoneLink"))}</a>`,
   );
 }
 
@@ -136,20 +191,36 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
   const [pitched, setPitched] = useState(false);
   const [mapEpoch, setMapEpoch] = useState(0);
   const [counts, setCounts] = useState<LegendCounts>(EMPTY_COUNTS);
+  const [mapNote, setMapNote] = useState<"loading" | "error" | null>("loading");
+  const [mapMissing, setMapMissing] = useState<Array<"stations" | "wards" | "fires">>([]);
+  const [readingsStale, setReadingsStale] = useState(false);
   const city = cities.find((c) => c.id === cityId);
+
+  useEffect(() => {
+    let stop = false;
+    Promise.all([api.health(), api.summary(cityId)]).then(([health, summary]) => {
+      if (stop) return;
+      setReadingsStale(Boolean(health.ingest?.lastError) || readingIsOld(summary.computedAt));
+    }).catch(() => {
+      if (!stop) setReadingsStale(true);
+    });
+    return () => {
+      stop = true;
+    };
+  }, [cityId]);
 
   useEffect(() => {
     if (!mapRef.current || !city) return;
     const map = new maplibregl.Map({
       container: mapRef.current,
-      style: MAP_STYLE,
+      style: mapStyleUrl(),
       center: [city.center.lng, city.center.lat],
       zoom: 10,
     });
     map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
     mapObj.current = map;
     let alive = true;
-    map.on("load", () => {
+    map.on("style.load", () => {
       if (alive) setMapEpoch((n) => n + 1);
     });
     return () => {
@@ -168,14 +239,40 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
   }, [pitched, mapEpoch]);
 
   useEffect(() => {
+    const root = document.documentElement;
+    let current = mapStyleUrl();
+    const observer = new MutationObserver(() => {
+      const next = mapStyleUrl();
+      if (next === current) return;
+      current = next;
+      mapObj.current?.setStyle(next);
+    });
+    observer.observe(root, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
     const map = mapObj.current;
     if (!map || mapEpoch === 0) return;
     let cancelled = false;
     let payload: MapPayload | null = null;
+    setMapNote("loading");
 
     const place: Place = (el, lng, lat, popup, offset) => {
       const marker = new maplibregl.Marker({ element: el, offset: offset ?? [0, 0] }).setLngLat([lng, lat]);
-      if (popup) marker.setPopup(new maplibregl.Popup({ offset: 12 }).setHTML(popup));
+      if (popup) {
+        const popupObj = new maplibregl.Popup({ offset: 12 }).setHTML(popup);
+        popupObj.on("open", () => {
+          popupObj.getElement()?.querySelectorAll<HTMLAnchorElement>("a[href^='/zones/']").forEach((link) => {
+            link.addEventListener("click", (event) => {
+              event.preventDefault();
+              const href = link.getAttribute("href");
+              if (href) navigate(href);
+            });
+          });
+        });
+        marker.setPopup(popupObj);
+      }
       marker.addTo(map);
       markers.current.push(marker);
     };
@@ -202,18 +299,18 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
             const label = t(lang, "offline");
             el.className = "pin station is-offline";
             el.textContent = label;
-            el.setAttribute("aria-label", `${s.name} ${label}`);
+            el.setAttribute("aria-label", readingsStale ? `${s.name} ${label}. ${staleLive(lang)}` : `${s.name} ${label}`);
           } else {
             const rounded = Math.round(s.aqi ?? 0);
-            el.className = `pin station tone-${aqiTone(rounded)}`;
+            el.className = readingsStale ? "pin station is-stale" : `pin station tone-${aqiTone(rounded)}`;
             el.textContent = String(rounded);
-            el.setAttribute("aria-label", `${s.name} ${rounded}`);
+            el.setAttribute("aria-label", readingsStale ? `${s.name} ${rounded}. ${staleLive(lang)}` : `${s.name} ${rounded}`);
           }
-          const zone = s.h3
-            ? `<br/><a href="/zones/${esc(s.h3)}">${esc(t(lang, "zoneLink"))} ${esc(s.h3.slice(0, 8))}</a>`
-            : "";
+          const cell = s.h3 || latLngToCell(s.lat, s.lng, 8);
+          const zone = `<br/><a href="/zones/${esc(cell)}">${esc(t(lang, "zoneLink"))}</a>`;
           const aqiText = offline ? esc(t(lang, "offline")) : String(Math.round(s.aqi ?? 0));
-          const popup = `<strong>${esc(s.name)}</strong><br/>AQI ${aqiText}${zone}`;
+          const staleLine = readingsStale ? `<br/>${esc(staleLive(lang))}` : "";
+          const popup = `<strong>${esc(s.name)}</strong><br/>${esc(t(lang, "aqi"))} ${aqiText}${staleLine}${zone}`;
           place(el, s.lng, s.lat, popup, offline ? undefined : offsets.get(s));
         }
         const incident = incidentPoint(s);
@@ -221,20 +318,28 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
       }
 
       for (const f of data.fires) {
-        const el = document.createElement("div");
+        const el = document.createElement("button");
+        el.type = "button";
         el.className = "pin fire";
-        el.title = t(lang, "fire");
-        const zone = f.h3 ? `<a href="/zones/${esc(f.h3)}">${esc(t(lang, "hex"))}</a>` : esc(t(lang, "fire"));
+        el.setAttribute("aria-label", t(lang, "fire"));
+        const cell = f.h3 || latLngToCell(f.lat, f.lng, 8);
+        const zone = `<a href="/zones/${esc(cell)}">${esc(t(lang, "zoneLink"))}</a>`;
         place(el, f.lng, f.lat, zone);
       }
 
       for (const w of data.wards) {
         if (!w.covered && w.centroid) {
           uncoveredCount += 1;
-          const el = document.createElement("div");
+          const where = w.name || `${w.centroid.lat.toFixed(2)}, ${w.centroid.lng.toFixed(2)}`;
+          const label = `${where} · ${t(lang, "uncoveredWard")}`;
+          const cell = w.h3 || latLngToCell(w.centroid.lat, w.centroid.lng, 8);
+          const el = document.createElement("button");
+          el.type = "button";
           el.className = "pin uncovered";
-          el.textContent = t(lang, "uncoveredWard");
-          place(el, w.centroid.lng, w.centroid.lat);
+          el.textContent = w.name || where;
+          el.setAttribute("aria-label", label);
+          const zone = `<br/><a href="/zones/${esc(cell)}">${esc(t(lang, "zoneLink"))}</a>`;
+          place(el, w.centroid.lng, w.centroid.lat, `<strong>${esc(label)}</strong>${zone}`);
         }
       }
 
@@ -274,20 +379,29 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
     map.on("zoomend", onZoomEnd);
 
     (async () => {
-      const [stationRes, wardRes, fireRes] = await Promise.all([
+      const [stationRes, wardRes, fireRes] = await Promise.allSettled([
         api.stations(cityId),
         api.wards(cityId),
         api.fires(cityId),
       ]);
       if (cancelled) return;
+      const missing: Array<"stations" | "wards" | "fires"> = [];
+      if (stationRes.status === "rejected") missing.push("stations");
+      if (wardRes.status === "rejected") missing.push("wards");
+      if (fireRes.status === "rejected") missing.push("fires");
       payload = {
-        stations: stationRes.stations,
-        wards: wardRes.wards,
-        fires: fireRes.fires,
-        incidents: [...(stationRes.incidents ?? []), ...(fireRes.incidents ?? [])],
+        stations: stationRes.status === "fulfilled" ? stationRes.value.stations : [],
+        wards: wardRes.status === "fulfilled" ? wardRes.value.wards : [],
+        fires: fireRes.status === "fulfilled" ? fireRes.value.fires : [],
+        incidents: [
+          ...(stationRes.status === "fulfilled" ? stationRes.value.incidents ?? [] : []),
+          ...(fireRes.status === "fulfilled" ? fireRes.value.incidents ?? [] : []),
+        ],
       };
       draw(payload);
-    })().catch(console.error);
+      setMapMissing(missing);
+      setMapNote(missing.length > 0 ? "error" : null);
+    })();
 
     return () => {
       cancelled = true;
@@ -296,10 +410,10 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
       markers.current = [];
       setCounts(EMPTY_COUNTS);
     };
-  }, [cityId, mapEpoch, lang, navigate]);
+  }, [cityId, mapEpoch, lang, navigate, readingsStale]);
 
   return (
-    <div className="stack">
+    <div className="stack map-page">
       <PageHead kicker={city?.name ?? ""} title={t(lang, "map")}>
         <button type="button" onClick={() => setPitched((v) => !v)}>
           {pitched ? t(lang, "flat") : t(lang, "buildings")}
@@ -307,19 +421,30 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
       </PageHead>
       <div className="map-frame">
         <div id="map" ref={mapRef} />
-      </div>
-      {counts.live + counts.offline + counts.fire + counts.incident + counts.uncovered + counts.offlineHidden > 0 ? (
+        {mapNote ? (
+          <div className="map-note" role="status">
+            {mapNote === "loading" ? t(lang, "loading") : (
+              <>
+                {PARTIAL_NOTE[lang] ?? PARTIAL_NOTE.en}: {mapMissing.map((id) => layerName(lang, id)).join(", ")}
+                {" "}
+                <button type="button" onClick={() => setMapEpoch((n) => n + 1)}>{retryLabel(lang)}</button>
+              </>
+            )}
+          </div>
+        ) : null}
+        {readingsStale || counts.live + counts.offline + counts.fire + counts.incident + counts.uncovered + counts.offlineHidden > 0 ? (
         <ul className="map-legend" aria-label={t(lang, "legendTitle")}>
+          {readingsStale ? <li className="legend-note">{staleLive(lang)}</li> : null}
           {counts.live > 0 ? (
             <li>
               <span className="swatch swatch-live" aria-hidden="true" />
-              {t(lang, "legendLive")}
+              {readingsStale ? staleLive(lang) : t(lang, "legendLive")}
             </li>
           ) : null}
           {counts.offline > 0 ? (
             <li>
               <span className="swatch swatch-offline" aria-hidden="true" />
-              {t(lang, "legendOffline")}
+              {readingsStale ? `${t(lang, "legendOffline")}. ${staleLive(lang)}` : t(lang, "legendOffline")}
             </li>
           ) : null}
           {counts.fire > 0 ? (
@@ -344,7 +469,8 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
             <li className="legend-note">{t(lang, "offlineHidden", { n: counts.offlineHidden })}</li>
           ) : null}
         </ul>
-      ) : null}
+        ) : null}
+      </div>
     </div>
   );
 }

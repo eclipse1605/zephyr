@@ -237,7 +237,8 @@ v1.get("/cities/:cityId/summary", citySummaryHandler);
 v1.get("/cities/:cityId/stations", async (req, res) => {
   const db = await store.read();
   const stations = Object.values(db.stations).filter((s) => s.cityId === param(req.params.cityId));
-  res.json({ stations });
+  const surfaces = Object.values(db.surfaceCells).filter((cell) => cell.cityId === param(req.params.cityId) && cell.basis === "reports");
+  res.json({ stations, surfaces });
 });
 v1.get("/cities/:cityId/wards", async (req, res) => {
   const db = await store.read();
@@ -272,8 +273,10 @@ v1.get("/zones/:h3", async (req, res) => {
   );
   const reports = Object.values(db.reports).filter((r) => r.h3 === h3);
   const scale = getCity(cityId)?.aqiScale ?? "india";
-  const advisory = nearest?.aqi != null ? groupAdvisoryForAqi(nearest.aqi, scale) : null;
-  res.json({ h3, cityId, center, nearestStation: nearest, distanceKm, advisory, incidents, openReports: reports.length });
+  const surface = db.surfaceCells[h3] ?? null;
+  const advisoryAqi = surface?.publishedAqi ?? nearest?.aqi ?? null;
+  const advisory = advisoryAqi != null ? groupAdvisoryForAqi(advisoryAqi, scale) : null;
+  res.json({ h3, cityId, center, nearestStation: nearest, distanceKm, advisory, incidents, openReports: reports.length, surface });
 });
 
 v1.get("/zones/:h3/forecast", async (req, res) => {

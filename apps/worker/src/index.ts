@@ -2,7 +2,7 @@ import { config as loadEnv } from "dotenv";
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { newId, processReportMessage, runTick, deliverPendingTasks, syncState, openStore, resolveFromRoot, resolveListenPort, authorizeInternal } from "@zephyr/server";
+import { newId, processReportMessage, runTick, deliverPendingTasks, syncState, openStore, resolveFromRoot, resolveListenPort, authorizeInternal, refreshWindGrid } from "@zephyr/server";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = process.env.ZEPHYR_ROOT ?? path.resolve(__dirname, "../../..");
@@ -36,8 +36,16 @@ app.post("/internal/catalog", (_req, res) => {
   res.json({ ok: true, scope: "twelve-cities" });
 });
 
-app.post("/internal/wind", (_req, res) => {
-  res.json({ ok: true, wind: "pending" });
+app.post("/internal/wind", async (_req, res) => {
+  try {
+    const result = await refreshWindGrid({
+      dataDir: DATA,
+      samplePath: path.join(FIXTURES, "wind", "sample.json"),
+    });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : "wind" });
+  }
 });
 
 app.post("/internal/tick", async (_req, res) => {

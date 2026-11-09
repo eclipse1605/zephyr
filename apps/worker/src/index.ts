@@ -2,7 +2,7 @@ import { config as loadEnv } from "dotenv";
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { newId, processReportMessage, runTick, deliverPendingTasks, syncState, openStore, resolveFromRoot, resolveListenPort, authorizeInternal, refreshWindGrid, enqueueIngestJobs, claimNextJob, runClaimedJob, replayIngestJob } from "@zephyr/server";
+import { processReportMessage, runTick, deliverPendingTasks, syncState, openStore, resolveFromRoot, resolveListenPort, authorizeInternal, refreshWindGrid, enqueueIngestJobs, claimNextJob, runClaimedJob, newId } from "@zephyr/server";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = process.env.ZEPHYR_ROOT ?? path.resolve(__dirname, "../../..");

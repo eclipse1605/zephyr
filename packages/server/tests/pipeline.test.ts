@@ -68,8 +68,10 @@ describe("file store and demo tick", () => {
   });
 
   test("a demo tick publishes a Delhi summary from fixtures", async () => {
-    const previous = process.env.TICK_CITY_PAUSE_MS;
+    const previousPause = process.env.TICK_CITY_PAUSE_MS;
+    const previousStore = process.env.ZEPHYR_STORE;
     process.env.TICK_CITY_PAUSE_MS = "0";
+    process.env.ZEPHYR_STORE = "file";
     const dir = await mkdtemp(path.join(tmpdir(), "zephyr-tick-"));
     const store = await openStore(dir);
     await store.ensure();
@@ -78,8 +80,10 @@ describe("file store and demo tick", () => {
     const db = await store.read();
     expect(db.citySummaries.delhi?.cityAqi).toEqual(expect.any(Number));
     expect(Object.values(db.stations).some((station) => station.cityId === "delhi" && station.online)).toBe(true);
-    if (previous === undefined) delete process.env.TICK_CITY_PAUSE_MS;
-    else process.env.TICK_CITY_PAUSE_MS = previous;
+    if (previousPause === undefined) delete process.env.TICK_CITY_PAUSE_MS;
+    else process.env.TICK_CITY_PAUSE_MS = previousPause;
+    if (previousStore === undefined) delete process.env.ZEPHYR_STORE;
+    else process.env.ZEPHYR_STORE = previousStore;
   });
 });
 
@@ -101,6 +105,39 @@ describe("report validation and worker auth", () => {
       expect((await (await post({ cityId: "delhi", lat: "28", lng: 77 })).json()).error).toBe("bad_coords");
       expect((await (await post({ cityId: "delhi", lat: 0, lng: 0 })).json()).error).toBe("outside_city");
     });
+  });
+
+  test("WhatsApp inbound stays off without Twilio", async () => {
+    process.env.ZEPHYR_NO_LISTEN = "1";
+    process.env.ZEPHYR_STORE = "file";
+    process.env.ZEPHYR_DATA_DIR = await mkdtemp(path.join(tmpdir(), "zephyr-wa-"));
+    const previous = {
+      sid: process.env.TWILIO_ACCOUNT_SID,
+      token: process.env.TWILIO_AUTH_TOKEN,
+      from: process.env.TWILIO_WHATSAPP_FROM,
+    };
+    delete process.env.TWILIO_ACCOUNT_SID;
+    delete process.env.TWILIO_AUTH_TOKEN;
+    delete process.env.TWILIO_WHATSAPP_FROM;
+    try {
+      const { app } = await import("../../../apps/api/src/index.ts");
+      await withServer(app, async (base) => {
+        const res = await fetch(`${base}/api/v1/whatsapp/inbound`, {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          body: "Body=smoke&Latitude=28.61&Longitude=77.21&From=whatsapp%3A%2B10000000000",
+        });
+        expect(res.status).toBe(200);
+        expect(await res.text()).toContain("not enabled");
+      });
+    } finally {
+      if (previous.sid === undefined) delete process.env.TWILIO_ACCOUNT_SID;
+      else process.env.TWILIO_ACCOUNT_SID = previous.sid;
+      if (previous.token === undefined) delete process.env.TWILIO_AUTH_TOKEN;
+      else process.env.TWILIO_AUTH_TOKEN = previous.token;
+      if (previous.from === undefined) delete process.env.TWILIO_WHATSAPP_FROM;
+      else process.env.TWILIO_WHATSAPP_FROM = previous.from;
+    }
   });
 
   test("worker tick is unauthorized without the cron secret", async () => {

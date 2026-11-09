@@ -67,24 +67,24 @@ describe("file store and demo tick", () => {
     else process.env.ZEPHYR_STORE = previous;
   });
 
-  test(
-    "a demo tick publishes a Delhi summary from fixtures",
-    async () => {
-      const previous = process.env.TICK_CITY_PAUSE_MS;
-      process.env.TICK_CITY_PAUSE_MS = "0";
-      const dir = await mkdtemp(path.join(tmpdir(), "zephyr-tick-"));
-      const store = await openStore(dir);
-      await store.ensure();
-      const result = await runTick({ store, fixturesRoot: path.join(repoRoot, "fixtures") });
-      expect(result.ok).toBe(true);
-      const db = await store.read();
-      expect(db.citySummaries.delhi?.cityAqi).toEqual(expect.any(Number));
-      expect(Object.values(db.stations).some((station) => station.cityId === "delhi" && station.online)).toBe(true);
-      if (previous === undefined) delete process.env.TICK_CITY_PAUSE_MS;
-      else process.env.TICK_CITY_PAUSE_MS = previous;
-    },
-    { timeout: 30_000 },
-  );
+  test("a demo tick publishes a Delhi summary from fixtures", async () => {
+    const previousPause = process.env.TICK_CITY_PAUSE_MS;
+    const previousStore = process.env.ZEPHYR_STORE;
+    process.env.TICK_CITY_PAUSE_MS = "0";
+    process.env.ZEPHYR_STORE = "file";
+    const dir = await mkdtemp(path.join(tmpdir(), "zephyr-tick-"));
+    const store = await openStore(dir);
+    await store.ensure();
+    const result = await runTick({ store, fixturesRoot: path.join(repoRoot, "fixtures") });
+    expect(result.ok).toBe(true);
+    const db = await store.read();
+    expect(db.citySummaries.delhi?.cityAqi).toEqual(expect.any(Number));
+    expect(Object.values(db.stations).some((station) => station.cityId === "delhi" && station.online)).toBe(true);
+    if (previousPause === undefined) delete process.env.TICK_CITY_PAUSE_MS;
+    else process.env.TICK_CITY_PAUSE_MS = previousPause;
+    if (previousStore === undefined) delete process.env.ZEPHYR_STORE;
+    else process.env.ZEPHYR_STORE = previousStore;
+  });
 });
 
 describe("report validation and worker auth", () => {

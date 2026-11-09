@@ -1,6 +1,6 @@
 # Live feeds
 
-The twelve monitored cities are the ingest list. Demo mode reads `fixtures/` and does not call these feeds.
+The twelve monitored cities are the ingest list and the live-product scope. Demo mode reads `fixtures/` and does not call these feeds. Catalog job shards may exist for later worldwide work; on a free OpenAQ key they are best-effort only and are not required for a finished twelve-city live loop.
 
 | Feed | Limit | What we store | Attribution |
 | --- | --- | --- | --- |

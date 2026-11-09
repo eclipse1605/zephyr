@@ -6,6 +6,8 @@ The module in this document is the tree under `infra/terraform`. Current values 
 
 **Status of the cloud path:** the module matches the Compose layout: Cloud SQL for Postgres, a GCS bucket for photos, Cloud Run, Scheduler, and Pub/Sub. Do not run `terraform apply` until Artifact Registry images are pushed and any third-party API-key secret you mount has a version. The database password secret is created by the module. `FIREBASE_SERVICE_ACCOUNT_KEY` is not required on Cloud Run.
 
+**Live product scope:** the twelve monitored cities. Worldwide model tiles and wind may still render; OpenAQ station ingest is not required to finish a planetary catalog.
+
 ---
 
 ## 1. What the product is

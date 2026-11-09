@@ -45,6 +45,9 @@ import {
   takeReportId,
   sniffImage,
   sniffAudio,
+  devSession,
+  lookupEmulatorAccount,
+  sessionFromAccount,
 } from "@zephyr/server";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -80,9 +83,26 @@ async function authUser(req: express.Request): Promise<{ uid: string; email: str
   const m = header.match(/^Bearer\s+(.+)$/i);
   if (!m) return null;
   const token = m[1]!;
-  if (process.env.ZEPHYR_DEV_AUTH === "1" && (token.startsWith("demo:") || token.startsWith("operator:"))) {
-    const email = token.slice(token.indexOf(":") + 1).toLowerCase();
-    return { uid: sha256(email).slice(0, 16), email, operator: operatorEmails().has(email) };
+  const dev = devSession(token, process.env.ZEPHYR_DEV_AUTH === "1", operatorEmails());
+  if (dev) return { ...dev, uid: sha256(dev.email).slice(0, 16) };
+  const emulator = process.env.FIREBASE_AUTH_EMULATOR_HOST?.trim();
+  if (emulator) {
+    const account = await lookupEmulatorAccount(emulator, token, process.env.FIREBASE_API_KEY?.trim() || "demo-key");
+    if (!account) return null;
+    const db = await store.read();
+    const session = sessionFromAccount(account, db.users[account.localId]?.role);
+    if (!session) return null;
+    const role = session.operator ? "operator" : "resident";
+    const known = db.users[session.uid];
+    if (!known || known.email !== session.email || known.role !== role) {
+      await store.update((next) => {
+        const previous = next.users[session.uid];
+        const kept = previous?.role === "operator" || session.operator ? "operator" : "resident";
+        next.users[session.uid] = { uid: session.uid, email: session.email, role: kept };
+      });
+      session.operator = role === "operator" || db.users[session.uid]?.role === "operator";
+    }
+    return session;
   }
   try {
     const res = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(token)}`);
@@ -177,6 +197,8 @@ v1.get("/health", async (_req, res) => {
       firebase: Boolean(process.env.FIREBASE_SERVICE_ACCOUNT_KEY?.trim()),
     },
     devAuth: process.env.ZEPHYR_DEV_AUTH === "1",
+    authEmulator: process.env.AUTH_EMULATOR_PUBLIC_HOST?.trim() || process.env.FIREBASE_AUTH_EMULATOR_HOST?.trim() || null,
+    firebaseProjectId: process.env.FIREBASE_PROJECT_ID?.trim() || null,
     ingest: db.ingest,
     forecastTraining: forecastTrainingStatus(
       Math.max(0, ...Object.values(

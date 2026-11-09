@@ -75,6 +75,7 @@ function defaults(): Db {
     pendingTasks: [],
     modelledHistory: [],
     sensorStreak: {},
+    users: {},
   };
 }
 

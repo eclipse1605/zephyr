@@ -7,4 +7,5 @@ export * from "./gcp.js";
 export * from "./util.js";
 export * from "./uploads.js";
 export { PostgresStore } from "./pgStore.js";
+export { devSession, lookupEmulatorAccount, sessionFromAccount } from "./firebaseAuth.js";
 export { openStore } from "./gcpStore.js";

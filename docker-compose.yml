@@ -6,8 +6,10 @@ services:
     ports:
       - "8080:8080"
     env_file:
-      - .env.local
-      - .env
+      - path: .env.local
+        required: false
+      - path: .env
+        required: false
     environment:
       PORT: "8080"
       ZEPHYR_DATA_DIR: /data
@@ -26,8 +28,10 @@ services:
     ports:
       - "8081:8081"
     env_file:
-      - .env.local
-      - .env
+      - path: .env.local
+        required: false
+      - path: .env
+        required: false
     environment:
       PORT: "8081"
       ZEPHYR_DATA_DIR: /data

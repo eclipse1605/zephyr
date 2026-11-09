@@ -1,6 +1,8 @@
 const LIGHT = "https://tiles.openfreemap.org/styles/positron";
 const DARK = "https://tiles.openfreemap.org/styles/dark";
 
+export const MAP_DARK = DARK;
+
 export function mapStyleUrl(): string {
   return document.documentElement.dataset.theme === "dark" ? DARK : LIGHT;
 }

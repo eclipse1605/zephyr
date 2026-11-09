@@ -192,8 +192,11 @@ export function Shell({
   setCityId,
   auth,
   login,
+  loginToken,
   logout,
   devAuth,
+  authEmulator,
+  emulatorSignIn,
   children,
 }: {
   cities: City[];
@@ -201,14 +204,18 @@ export function Shell({
   setCityId: (id: string) => void;
   auth: Auth | null;
   login: (email: string, operator: boolean) => void;
+  loginToken: (email: string, token: string) => void;
   logout: () => void;
   devAuth: boolean;
+  authEmulator: string | null;
+  emulatorSignIn: (email: string, password: string) => Promise<{ idToken: string; email: string }>;
   children: ReactNode;
 }) {
   const { lang, setLang } = useContext(LangContext);
   const { pathname } = useLocation();
   const [open, setOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
+  const [signError, setSignError] = useState<string | null>(null);
 
   useEffect(() => {
     setNavOpen(false);
@@ -318,6 +325,32 @@ export function Shell({
                 {OP_OPEN[lang] ?? OP_OPEN.en}
               </button>
             </div>
+          ) : null}
+          {authEmulator && !auth ? (
+            <form
+              className="operator-login"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const data = new FormData(event.currentTarget);
+                const email = String(data.get("email") ?? "").trim();
+                const password = String(data.get("password") ?? "");
+                setSignError(null);
+                void emulatorSignIn(email, password).then((session) => {
+                  loginToken(session.email, session.idToken);
+                }).catch(() => setSignError(OP_SIGN[lang] ?? OP_SIGN.en));
+              }}
+            >
+              <label>
+                {t(lang, "operatorEmail")}
+                <input type="email" name="email" required autoComplete="username" />
+              </label>
+              <label>
+                {OP_SIGN[lang] ?? OP_SIGN.en}
+                <input type="password" name="password" required minLength={6} autoComplete="current-password" />
+              </label>
+              {signError ? <p className="error">{signError}</p> : null}
+              <button type="submit" className="primary">{OP_SIGN[lang] ?? OP_SIGN.en}</button>
+            </form>
           ) : null}
           {devAuth && open && !auth ? (
             <form

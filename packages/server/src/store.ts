@@ -197,6 +197,7 @@ type Db = {
   pendingTasks: StoredTask[];
   modelledHistory: Array<{ stationId: string; at: string; pm25: number }>;
   sensorStreak: Record<string, number>;
+  users: Record<string, { uid: string; email: string; role: "resident" | "operator" }>;
 };
 
 export const emptyDb = (): Db => ({
@@ -230,6 +231,7 @@ export const emptyDb = (): Db => ({
   pendingTasks: [],
   modelledHistory: [],
   sensorStreak: {},
+  users: {},
 });
 
 export class FileStore {
@@ -266,6 +268,7 @@ export class FileStore {
       pendingTasks: parsed.pendingTasks ?? [],
       modelledHistory: parsed.modelledHistory ?? [],
       sensorStreak: parsed.sensorStreak ?? {},
+      users: parsed.users ?? {},
     };
   }
 

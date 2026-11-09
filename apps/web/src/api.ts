@@ -21,6 +21,8 @@ export type Health = {
   } | null;
   integrations: Record<string, boolean>;
   devAuth?: boolean;
+  authEmulator?: string | null;
+  firebaseProjectId?: string | null;
 };
 
 export type CitySummary = {
@@ -195,6 +197,31 @@ async function upload(path: string, field: string, file: File, token: string) {
     throw new Error(err.error ?? "upload failed");
   }
   return res.json();
+}
+
+export async function emulatorPassword(host: string, email: string, password: string): Promise<{ idToken: string; email: string }> {
+  const key = "demo-key";
+  const body = JSON.stringify({ email, password, returnSecureToken: true });
+  const signIn = await fetch(`http://${host}/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${key}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body,
+  });
+  const payload = signIn.ok
+    ? await signIn.json() as { idToken?: string; email?: string }
+    : null;
+  const created = payload?.idToken
+    ? payload
+    : await fetch(`http://${host}/identitytoolkit.googleapis.com/v1/accounts:signUp?key=${key}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+    }).then(async (response) => {
+      if (!response.ok) throw new Error("sign_in_failed");
+      return response.json() as Promise<{ idToken?: string; email?: string }>;
+    });
+  if (!created.idToken) throw new Error("sign_in_failed");
+  return { idToken: created.idToken, email: created.email ?? email };
 }
 
 export const api = {

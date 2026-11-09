@@ -13,8 +13,9 @@
     "dev:web": "bun run --filter @zephyr/web dev",
     "typecheck": "bun run --filter @zephyr/domain typecheck && bun run --filter @zephyr/server typecheck && bun run --filter @zephyr/api typecheck && bun run --filter @zephyr/worker typecheck && bun run --filter @zephyr/web typecheck"
   },
+  "packageManager": "bun@1.4.4",
   "engines": {
-    "bun": ">=1.2"
+    "bun": "1.4.4"
   },
   "trustedDependencies": ["esbuild"]
 }

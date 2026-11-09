@@ -31,7 +31,6 @@ import {
   sha256,
   processReportMessage,
   resolveIncident,
-  runTick,
   generateZoneBrief,
   runCopilot,
   arimaForecast,
@@ -55,6 +54,8 @@ import {
   cachedModelPoint,
   cachedModelTile,
   readWindGrid,
+  enqueueIngestJobs,
+  replayIngestJob,
 } from "@zephyr/server";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -290,6 +291,27 @@ v1.get("/cities/:cityId/stations", async (req, res) => {
     if (city?.stations.sources.includes("waqi")) liveWaqi = await fetchLiveWaqi(city) as typeof stations;
   }
   res.json({ stations: [...stations, ...liveWaqi], surfaces });
+});
+
+v1.get("/stations", async (req, res) => {
+  const west = Number(req.query.west);
+  const south = Number(req.query.south);
+  const east = Number(req.query.east);
+  const north = Number(req.query.north);
+  if (![west, south, east, north].every((n) => Number.isFinite(n))) {
+    return res.status(400).json({ error: "bbox_required" });
+  }
+  const db = await store.read();
+  const stations = Object.values(db.stations).filter((s) => {
+    if (s.sourceFeed === "waqi") return false;
+    const minLng = Math.min(west, east);
+    const maxLng = Math.max(west, east);
+    const minLat = Math.min(south, north);
+    const maxLat = Math.max(south, north);
+    return s.lng >= minLng && s.lng <= maxLng && s.lat >= minLat && s.lat <= maxLat;
+  });
+  const surfaces = Object.values(db.surfaceCells).filter((cell) => cell.basis === "reports");
+  res.json({ stations, surfaces });
 });
 v1.get("/cities/:cityId/wards", async (req, res) => {
   const db = await store.read();
@@ -765,9 +787,14 @@ v1.post("/operator/dlq/:id/replay", async (req, res) => {
   const db = await store.read();
   const item = db.dlqItems[param(req.params.id)];
   if (!item) return res.status(404).json({ error: "not_found" });
-  const body = item.body as { reportId?: string };
+  const body = item.body as { reportId?: string; kind?: string; jobId?: string };
   item.replayedAt = new Date().toISOString();
   await store.write(db);
+  if (body.kind === "ingest_job" && body.jobId) {
+    const ok = await replayIngestJob(store, body.jobId);
+    if (!ok) return res.status(404).json({ error: "job_not_found" });
+    return res.json({ ok: true, replayed: "ingest_job" });
+  }
   if (body.reportId) {
     try {
       await processReportMessage(store, body.reportId);
@@ -794,11 +821,12 @@ v1.post("/system/tick", async (req, res) => {
     const headers = await internalAuthHeaders(WORKER_URL);
     const tick = await fetch(`${WORKER_URL}/internal/tick`, { method: "POST", headers });
     if (!tick.ok) throw new Error("worker_rejected");
+    const body = await tick.json().catch(() => ({ ok: true }));
+    return res.json({ ...body, via: "worker" });
   } catch {
-    const result = await runTick({ store, fixturesRoot: FIXTURES });
-    return res.json(result);
+    const queued = await enqueueIngestJobs(store);
+    return res.json({ ok: true, ...queued, via: "local-enqueue" });
   }
-  res.json({ ok: true, via: "worker" });
 });
 
 v1.post("/whatsapp/inbound", async (req, res) => {

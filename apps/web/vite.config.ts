@@ -23,7 +23,7 @@ function readRepoEnv(dir: string): Record<string, string> {
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const repoEnv = readRepoEnv(repoRoot);
-const apiPort = process.env.API_PORT || repoEnv.API_PORT || "8090";
+const apiPort = process.env.API_PORT || repoEnv.API_PORT || "8080";
 const apiProxy = process.env.API_PROXY || repoEnv.API_PROXY || `http://127.0.0.1:${apiPort}`;
 
 export default defineConfig({

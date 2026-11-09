@@ -516,6 +516,24 @@ resource "google_cloud_scheduler_job" "wind" {
   depends_on = [google_project_service.apis]
 }
 
+resource "google_cloud_scheduler_job" "jobs_run" {
+  name             = "${var.name_prefix}-jobs-run"
+  schedule         = "*/2 * * * *"
+  time_zone        = "Asia/Kolkata"
+  attempt_deadline = "180s"
+
+  http_target {
+    http_method = "POST"
+    uri         = "${google_cloud_run_v2_service.worker.uri}/internal/jobs/run"
+    oidc_token {
+      service_account_email = google_service_account.scheduler.email
+      audience              = google_cloud_run_v2_service.worker.uri
+    }
+  }
+
+  depends_on = [google_project_service.apis]
+}
+
 resource "google_secret_manager_secret" "keys" {
   for_each = toset([
     "OPENAQ_API_KEY",

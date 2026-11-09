@@ -5,7 +5,7 @@ import type * as MapLibre from "maplibre-gl";
 import { api, type City, type MapIncident, type Station } from "./api";
 import { t } from "./i18n";
 import { useLang } from "./lang";
-import { mapStyleUrl, retryLabel } from "./mapStyle";
+import { MAP_DARK, retryLabel } from "./mapStyle";
 import { enumText, sourceLabel } from "./flows";
 import { aqiTone, PageHead } from "./uiBits";
 import "./map.css";
@@ -60,7 +60,7 @@ const PARTIAL_NOTE: Record<string, string> = {
   pt: "Algumas camadas não carregaram",
 };
 
-const SOURCE_LINE = "Stations: OpenAQ and CPCB are stored. WAQI is shown live and is not stored. Google air quality is not drawn on this map.";
+const SOURCE_LINE = "The color field is an Open-Meteo / CAMS model, not the city number. Stations: OpenAQ and CPCB are stored. WAQI is shown live and is not stored.";
 
 function layerName(lang: string, id: "stations" | "wards" | "fires"): string {
   return LAYER_NAME[id][lang] ?? LAYER_NAME[id].en;
@@ -198,6 +198,9 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
   const [mapNote, setMapNote] = useState<"loading" | "error" | null>("loading");
   const [mapMissing, setMapMissing] = useState<Array<"stations" | "wards" | "fires">>([]);
   const [readingsStale, setReadingsStale] = useState(false);
+  const [raster, setRaster] = useState<"aqi" | "pm25">("aqi");
+  const rasterRef = useRef(raster);
+  rasterRef.current = raster;
   const city = cities.find((c) => c.id === cityId);
 
   useEffect(() => {
@@ -223,14 +226,48 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
       ml.current = maplibregl;
       map = new maplibregl.Map({
         container,
-        style: mapStyleUrl(),
+        style: MAP_DARK,
         center: [city.center.lng, city.center.lat],
-        zoom: 10,
-      });
+        zoom: 1.5,
+        projection: { type: "globe" },
+      } as MapLibre.MapOptions);
+      (map as MapLibre.Map & { setProjection?: (projection: { type: "globe" }) => void }).setProjection?.({ type: "globe" });
       map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
       mapObj.current = map;
+      const modelMap = map;
+      map.on("click", (event) => {
+        const target = event.originalEvent.target;
+        if (target instanceof Element && target.closest(".maplibregl-marker")) return;
+        void fetch(`/api/v1/model/point?lat=${event.lngLat.lat}&lng=${event.lngLat.lng}`)
+          .then((res) => (res.ok ? res.json() : null))
+          .then((point: { aqi?: number | null; pm25?: number | null; pm10?: number | null; no2?: number | null; ozone?: number | null; so2?: number | null; co?: number | null; attribution?: string; note?: string } | null) => {
+            if (!point || !alive) return;
+            const line = (label: string, value: number | null | undefined, unit = "µg/m³") =>
+              value == null ? "" : `<br/>${label} ${Math.round(value)} ${unit}`;
+            new maplibregl.Popup({ offset: 12 })
+              .setLngLat(event.lngLat)
+              .setHTML(`<strong>Model</strong><br/>US AQI ${point.aqi ?? "—"}${line("PM2.5", point.pm25)}${line("PM10", point.pm10)}${line("NO2", point.no2)}${line("Ozone", point.ozone)}${line("SO2", point.so2)}${line("CO", point.co)}<br/>${point.attribution ?? "Open-Meteo / CAMS"}<br/>${point.note ?? ""}`)
+              .addTo(modelMap);
+          })
+          .catch(() => undefined);
+      });
       map.on("style.load", () => {
-        if (alive) setMapEpoch((n) => n + 1);
+        if (!alive) return;
+        const layer = rasterRef.current;
+        if (!modelMap.getSource("model-raster")) {
+          modelMap.addSource("model-raster", {
+            type: "raster",
+            tiles: [`/api/v1/model/tiles/${layer}/{z}/{x}/{y}`],
+            tileSize: 256,
+            maxzoom: 8,
+            attribution: "Open-Meteo / CAMS",
+          });
+          modelMap.addLayer({ id: "model-raster", type: "raster", source: "model-raster", paint: { "raster-opacity": 0.72 } });
+        }
+        modelMap.easeTo({ center: [city.center.lng, city.center.lat], zoom: 9.5, duration: 1600, essential: true });
+        modelMap.once("moveend", () => {
+          if (alive) setMapEpoch((n) => n + 1);
+        });
       });
     });
     return () => {
@@ -244,22 +281,15 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
 
   useEffect(() => {
     const map = mapObj.current;
-    if (!map || mapEpoch === 0) return;
-    map.easeTo({ pitch: pitched ? 60 : 0, zoom: pitched ? 15 : 10, duration: 700 });
-  }, [pitched, mapEpoch]);
+    const source = map?.getSource("model-raster") as { setTiles?: (tiles: string[]) => void } | undefined;
+    source?.setTiles?.([`/api/v1/model/tiles/${raster}/{z}/{x}/{y}`]);
+  }, [raster, mapEpoch]);
 
   useEffect(() => {
-    const root = document.documentElement;
-    let current = mapStyleUrl();
-    const observer = new MutationObserver(() => {
-      const next = mapStyleUrl();
-      if (next === current) return;
-      current = next;
-      mapObj.current?.setStyle(next);
-    });
-    observer.observe(root, { attributes: true, attributeFilter: ["data-theme"] });
-    return () => observer.disconnect();
-  }, []);
+    const map = mapObj.current;
+    if (!map) return;
+    map.easeTo({ pitch: pitched ? 60 : 0, zoom: pitched ? 15 : map.getZoom(), duration: 700 });
+  }, [pitched]);
 
   useEffect(() => {
     const map = mapObj.current;
@@ -427,6 +457,9 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
   return (
     <div className="stack map-page">
       <PageHead kicker={city?.name ?? ""} title={t(lang, "map")}>
+        <button type="button" onClick={() => setRaster((layer) => (layer === "aqi" ? "pm25" : "aqi"))}>
+          {raster === "aqi" ? "US AQI" : "PM2.5"}
+        </button>
         <button type="button" onClick={() => setPitched((v) => !v)}>
           {pitched ? t(lang, "flat") : t(lang, "buildings")}
         </button>

@@ -52,6 +52,8 @@ import {
   fetchLiveWaqi,
   openAqBudgetStatus,
   internalAuthHeaders,
+  cachedModelPoint,
+  cachedModelTile,
 } from "@zephyr/server";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -179,6 +181,41 @@ v1.get("/auth/whoami", async (req, res) => {
   const u = await authUser(req);
   if (!u) return res.status(401).json({ error: "unauthorized" });
   res.json({ email: u.email, operator: u.operator });
+});
+
+v1.get("/model/tiles/:layer/:z/:x/:y", async (req, res) => {
+  const layer = param(req.params.layer);
+  if (layer !== "aqi" && layer !== "pm25") return res.status(400).json({ error: "bad_layer" });
+  const z = Number(param(req.params.z));
+  const x = Number(param(req.params.x));
+  const y = Number(param(req.params.y));
+  try {
+    const tile = await cachedModelTile({ layer, z, x, y, cacheDir: path.join(DATA, "model-tiles") });
+    res.set("Cache-Control", "public, max-age=3600");
+    res.set("X-Zephyr-Cache", tile.cached ? "hit" : "miss");
+    res.type("png").send(tile.png);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "tile";
+    res.status(message === "zoom" || message === "tile" ? 404 : 502).json({ error: message });
+  }
+});
+
+v1.get("/model/point", async (req, res) => {
+  const lat = Number(req.query.lat);
+  const lng = Number(req.query.lng);
+  try {
+    const point = await cachedModelPoint({ lat, lng, cacheDir: path.join(DATA, "model-tiles") });
+    res.set("Cache-Control", "public, max-age=3600");
+    res.json({
+      source: "open-meteo",
+      attribution: "Open-Meteo / CAMS",
+      note: "Model background. This is not the published city number.",
+      ...point,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "point";
+    res.status(message === "point" ? 400 : 502).json({ error: message });
+  }
 });
 
 v1.get("/health", async (_req, res) => {

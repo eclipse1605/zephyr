@@ -221,10 +221,9 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
   useEffect(() => {
     if (!mapRef.current || !city) return;
     const container = mapRef.current;
-    const center = city.center;
+    const start = city.center;
     let alive = true;
     let map: MapLibre.Map | null = null;
-    let readyOnce = false;
     let bootTimer = 0;
     void import("maplibre-gl").then((maplibregl) => {
       if (!alive) return;
@@ -232,7 +231,7 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
       map = new maplibregl.Map({
         container,
         style: MAP_DARK,
-        center: [center.lng, center.lat],
+        center: [start.lng, start.lat],
         zoom: 1.5,
       });
       mapObj.current = map;
@@ -272,13 +271,6 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
         } catch {
           return;
         }
-        if (!readyOnce) {
-          readyOnce = true;
-          window.setTimeout(() => {
-            if (!alive) return;
-            modelMap.easeTo({ center: [center.lng, center.lat], zoom: 9.5, duration: 1600, essential: true });
-          }, 0);
-        }
       };
       map.on("style.load", () => {
         try {
@@ -300,8 +292,16 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
       markers.current = [];
       map?.remove();
       mapObj.current = null;
+      setMapEpoch(0);
     };
-  }, [cityId, city?.center.lat, city?.center.lng]);
+    // Keep one MapLibre instance; city changes fly the camera instead of remounting.
+  }, [city ? "ready" : "wait"]);
+
+  useEffect(() => {
+    const map = mapObj.current;
+    if (!map || !city || mapEpoch === 0) return;
+    map.easeTo({ center: [city.center.lng, city.center.lat], zoom: 9.5, duration: 900, essential: true });
+  }, [cityId, city?.center.lat, city?.center.lng, mapEpoch]);
 
   useEffect(() => {
     const map = mapObj.current;
@@ -463,31 +463,48 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
 
     map.on("zoomend", onZoomEnd);
 
-    (async () => {
-      const [stationRes, wardRes, fireRes] = await Promise.allSettled([
-        api.stations(cityId),
-        api.wards(cityId),
-        api.fires(cityId),
-      ]);
-      if (cancelled) return;
-      const missing: Array<"stations" | "wards" | "fires"> = [];
-      if (stationRes.status === "rejected") missing.push("stations");
-      if (wardRes.status === "rejected") missing.push("wards");
-      if (fireRes.status === "rejected") missing.push("fires");
-      payload = {
-        stations: stationRes.status === "fulfilled" ? stationRes.value.stations : [],
-        wards: wardRes.status === "fulfilled" ? wardRes.value.wards : [],
-        fires: fireRes.status === "fulfilled" ? fireRes.value.fires : [],
-        surfaces: stationRes.status === "fulfilled" ? stationRes.value.surfaces ?? [] : [],
-        incidents: [
-          ...(stationRes.status === "fulfilled" ? stationRes.value.incidents ?? [] : []),
-          ...(fireRes.status === "fulfilled" ? fireRes.value.incidents ?? [] : []),
-        ],
-      };
+    payload = { stations: [], wards: [], fires: [], surfaces: [], incidents: [] };
+    const missing: Array<"stations" | "wards" | "fires"> = [];
+    let pending = 3;
+    const finishOne = () => {
+      pending -= 1;
+      if (cancelled || !payload) return;
       draw(payload);
+      if (pending > 0) {
+        setMapNote("loading");
+        return;
+      }
       setMapMissing(missing);
       setMapNote(missing.length > 0 ? "error" : null);
-    })();
+    };
+
+    void api.stations(cityId).then((value) => {
+      if (cancelled || !payload) return;
+      payload.stations = value.stations;
+      payload.surfaces = value.surfaces ?? [];
+      payload.incidents = [...(value.incidents ?? []), ...payload.incidents];
+      finishOne();
+    }).catch(() => {
+      missing.push("stations");
+      finishOne();
+    });
+    void api.wards(cityId).then((value) => {
+      if (cancelled || !payload) return;
+      payload.wards = value.wards;
+      finishOne();
+    }).catch(() => {
+      missing.push("wards");
+      finishOne();
+    });
+    void api.fires(cityId).then((value) => {
+      if (cancelled || !payload) return;
+      payload.fires = value.fires;
+      payload.incidents = [...payload.incidents, ...(value.incidents ?? [])];
+      finishOne();
+    }).catch(() => {
+      missing.push("fires");
+      finishOne();
+    });
 
     return () => {
       cancelled = true;

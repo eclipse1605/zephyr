@@ -159,21 +159,21 @@ async function checkApiKey(req: express.Request): Promise<boolean> {
 }
 
 async function enqueueReport(reportId: string) {
-  // Local: push to shared pending queue; also try HTTP to worker.
-  await store.update((db) => {
-    db.pendingMessages.push({ id: newId(), type: "report.submitted", body: { reportId } });
-  });
-  await publishReport(reportId).catch(() => false);
-  try {
-    const headers: Record<string, string> = { "Content-Type": "application/json", ...(await internalAuthHeaders(WORKER_URL)) };
-    await fetch(`${WORKER_URL}/internal/pubsub/reports`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ message: { data: Buffer.from(JSON.stringify({ reportId })).toString("base64") } }),
-    });
-  } catch {
-    // worker may process pendingMessages on its tick
-  }
+  // Queue locally, then kick the worker without waiting on Gemini.
+  await store.pushPendingMessage({ id: newId(), type: "report.submitted", body: { reportId } });
+  void publishReport(reportId).catch(() => false);
+  void (async () => {
+    try {
+      const headers: Record<string, string> = { "Content-Type": "application/json", ...(await internalAuthHeaders(WORKER_URL)) };
+      await fetch(`${WORKER_URL}/internal/pubsub/reports`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ message: { data: Buffer.from(JSON.stringify({ reportId })).toString("base64") } }),
+      });
+    } catch {
+      // worker may process pendingMessages on its tick
+    }
+  })();
 }
 
 const v1 = express.Router();
@@ -513,7 +513,7 @@ v1.post("/reports/:id/photo", upload.single("photo"), async (req, res) => {
   } catch {
     return res.status(400).json({ error: "bad_id" });
   }
-  await store.write(db);
+  await store.saveReport(report);
   res.json({ ok: true });
 });
 
@@ -525,7 +525,7 @@ v1.post("/reports/:id/commit", async (req, res) => {
   if (!(await store.photoExists(id))) return res.status(400).json({ error: "photo_missing" });
   report.status = "received";
   if (req.body?.sha256) report.photoSha256 = req.body.sha256;
-  await store.write(db);
+  await store.saveReport(report);
   await enqueueReport(id);
   res.json({ ok: true, reportId: id, status: report.status });
 });
@@ -750,7 +750,7 @@ v1.post("/reports/:id/voice", upload.single("voice"), async (req, res) => {
   } catch {
     return res.status(400).json({ error: "bad_id" });
   }
-  await store.write(db);
+  await store.saveReport(report);
   res.json({ ok: true });
 });
 

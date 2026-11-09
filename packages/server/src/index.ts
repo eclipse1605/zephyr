@@ -11,3 +11,11 @@ export { devSession, lookupEmulatorAccount, sessionFromAccount } from "./firebas
 export { openStore } from "./gcpStore.js";
 export { cachedModelPoint, cachedModelTile, type RasterLayer } from "./modelRaster.js";
 export { readWindGrid, refreshWindGrid } from "./windGrid.js";
+export {
+  enqueueIngestJobs,
+  claimNextJob,
+  runClaimedJob,
+  drainIngestJobs,
+  replayIngestJob,
+  stationContentHash,
+} from "./ingestJobs.js";

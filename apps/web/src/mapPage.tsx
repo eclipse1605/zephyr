@@ -456,12 +456,26 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
       });
     };
 
+    const refreshStations = () => {
+      if (cancelled || !payload) return;
+      const next = map.getBounds();
+      const sw = next.getSouthWest();
+      const ne = next.getNorthEast();
+      void api.stationsInBounds({ west: sw.lng, south: sw.lat, east: ne.lng, north: ne.lat }).then((value) => {
+        if (cancelled || !payload) return;
+        payload.stations = value.stations;
+        payload.surfaces = value.surfaces ?? [];
+        draw(payload);
+      }).catch(() => undefined);
+    };
+
     const onZoomEnd = () => {
       if (cancelled || !payload) return;
-      draw(payload);
+      refreshStations();
     };
 
     map.on("zoomend", onZoomEnd);
+    map.on("moveend", refreshStations);
 
     payload = { stations: [], wards: [], fires: [], surfaces: [], incidents: [] };
     const missing: Array<"stations" | "wards" | "fires"> = [];
@@ -478,11 +492,13 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
       setMapNote(missing.length > 0 ? "error" : null);
     };
 
-    void api.stations(cityId).then((value) => {
+    const bounds = map.getBounds();
+    const sw = bounds.getSouthWest();
+    const ne = bounds.getNorthEast();
+    void api.stationsInBounds({ west: sw.lng, south: sw.lat, east: ne.lng, north: ne.lat }).then((value) => {
       if (cancelled || !payload) return;
       payload.stations = value.stations;
       payload.surfaces = value.surfaces ?? [];
-      payload.incidents = [...(value.incidents ?? []), ...payload.incidents];
       finishOne();
     }).catch(() => {
       missing.push("stations");
@@ -509,6 +525,7 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
     return () => {
       cancelled = true;
       map.off("zoomend", onZoomEnd);
+      map.off("moveend", refreshStations);
       markers.current.forEach((marker) => marker.remove());
       markers.current = [];
       setCounts(EMPTY_COUNTS);

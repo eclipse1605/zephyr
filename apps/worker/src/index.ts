@@ -2,7 +2,7 @@ import { config as loadEnv } from "dotenv";
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { newId, processReportMessage, runTick, deliverPendingTasks, syncState, openStore, resolveFromRoot, resolveListenPort, authorizeInternal, refreshWindGrid } from "@zephyr/server";
+import { processReportMessage, runTick, deliverPendingTasks, syncState, openStore, resolveFromRoot, resolveListenPort, authorizeInternal, refreshWindGrid, enqueueIngestJobs, claimNextJob, runClaimedJob, newId } from "@zephyr/server";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = process.env.ZEPHYR_ROOT ?? path.resolve(__dirname, "../../..");
@@ -32,8 +32,9 @@ app.use("/internal", (req, res, next) => {
   next();
 });
 
-app.post("/internal/catalog", (_req, res) => {
-  res.json({ ok: true, scope: "twelve-cities" });
+app.post("/internal/catalog", async (_req, res) => {
+  const queued = await enqueueIngestJobs(store);
+  res.json({ ok: true, scope: "twelve-cities", ...queued });
 });
 
 app.post("/internal/wind", async (_req, res) => {
@@ -49,33 +50,30 @@ app.post("/internal/wind", async (_req, res) => {
 });
 
 app.post("/internal/tick", async (_req, res) => {
-  const result = await runTick({ store, fixturesRoot: FIXTURES });
-  await deliverPendingTasks(store);
-  await syncState(store).catch(() => undefined);
-  // Drain locally queued report messages
-  const db = await store.read();
-  const pending = [...db.pendingMessages];
-  db.pendingMessages = [];
-  await store.write(db);
-  for (const msg of pending) {
-    if (msg.type === "report.submitted") {
-      const body = msg.body as { reportId: string };
-      try {
-        await processReportMessage(store, body.reportId);
-      } catch (err) {
-        await store.update((d) => {
-          d.dlqItems[msg.id] = {
-            messageId: msg.id,
-            body: msg.body,
-            error: err instanceof Error ? err.message : String(err),
-            failedAt: new Date().toISOString(),
-            replayedAt: null,
-          };
-        });
-      }
-    }
+  // Scheduler only enqueues; workers claim shards separately.
+  const queued = await enqueueIngestJobs(store);
+  res.json({ ok: true, enqueued: queued.enqueued, jobIds: queued.jobIds });
+});
+
+app.post("/internal/jobs/run", async (_req, res) => {
+  const job = await claimNextJob(store, {
+    store,
+    fixturesRoot: FIXTURES,
+    dataDir: DATA,
+    sampleWindPath: path.join(FIXTURES, "wind", "sample.json"),
+  });
+  if (!job) {
+    await deliverPendingTasks(store);
+    await syncState(store).catch(() => undefined);
+    return res.json({ ok: true, ran: false });
   }
-  res.status(result.ok ? 200 : 500).json(result);
+  await runClaimedJob(job, {
+    store,
+    fixturesRoot: FIXTURES,
+    dataDir: DATA,
+    sampleWindPath: path.join(FIXTURES, "wind", "sample.json"),
+  });
+  res.json({ ok: true, ran: true, jobId: job.id, kind: job.kind, shard: job.shard });
 });
 
 app.post("/internal/pubsub/reports", async (req, res) => {
@@ -139,7 +137,7 @@ if (process.env.ZEPHYR_NO_LISTEN !== "1") {
     console.log(`zephyr worker listening on :${PORT}`);
   });
   // Bootstrap after listen so health checks are not blocked by fixture ingest.
-  void runTick({ store, fixturesRoot: FIXTURES })
+  void runTick({ store, fixturesRoot: FIXTURES, dataDir: DATA })
     .then((r) => console.log(JSON.stringify({ event: "bootstrap_tick", ...r })))
     .catch((err) => console.error("bootstrap_tick_failed", err));
 }

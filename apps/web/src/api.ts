@@ -236,6 +236,10 @@ export const api = {
   cities: () => req<{ cities: City[] }>("/cities"),
   summary: (cityId: string) => req<CitySummary>(`/cities/${cityId}/summary`),
   stations: (cityId: string) => req<{ stations: Station[]; incidents?: MapIncident[]; surfaces?: Array<{ h3: string; publishedAqi: number | null; basis: string }> }>(`/cities/${cityId}/stations`),
+  stationsInBounds: (bbox: { west: number; south: number; east: number; north: number }) =>
+    req<{ stations: Station[]; surfaces?: Array<{ h3: string; publishedAqi: number | null; basis: string }> }>(
+      `/stations?west=${bbox.west}&south=${bbox.south}&east=${bbox.east}&north=${bbox.north}`,
+    ),
   wards: (cityId: string) => req<{ wards: Ward[] }>(`/cities/${cityId}/wards`),
   fires: (cityId: string) => req<{ fires: Fire[]; incidents?: MapIncident[] }>(`/cities/${cityId}/fires`),
   zone: (h3: string) => req<ZoneView>(`/zones/${encodeURIComponent(h3)}`),

@@ -23,6 +23,25 @@ export type StoredStation = {
   aqi: number | null;
   dominantPollutant: string | null;
   band: string | null;
+  contentHash?: string | null;
+};
+
+export type IngestJobKind = "catalog" | "wind" | "ops";
+export type IngestJobStatus = "queued" | "running" | "done" | "dead";
+
+export type IngestJob = {
+  id: string;
+  kind: IngestJobKind;
+  shard: string;
+  cursor: string | null;
+  leaseOwner: string | null;
+  leaseUntil: string | null;
+  failures: number;
+  status: IngestJobStatus;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+  finishedAt: string | null;
 };
 
 export type CitySummary = {
@@ -208,6 +227,7 @@ export type Db = {
     basis: "station" | "reports" | "model";
     computedAt: string;
   }>;
+  ingestJobs: Record<string, IngestJob>;
 };
 
 export const emptyDb = (): Db => ({
@@ -243,6 +263,7 @@ export const emptyDb = (): Db => ({
   sensorStreak: {},
   users: {},
   surfaceCells: {},
+  ingestJobs: {},
 });
 
 export class FileStore {
@@ -283,6 +304,7 @@ export class FileStore {
       sensorStreak: parsed.sensorStreak ?? {},
       users: parsed.users ?? {},
       surfaceCells: parsed.surfaceCells ?? {},
+      ingestJobs: parsed.ingestJobs ?? {},
     };
   }
 

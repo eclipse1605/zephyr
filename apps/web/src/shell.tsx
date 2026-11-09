@@ -3,6 +3,7 @@ import { Link, NavLink, useLocation } from "react-router-dom";
 import { rememberTrack, savedTracks, trackHeading } from "./advice";
 import { LANGUAGES, t } from "./i18n";
 import { LangContext } from "./lang";
+import { LegalFooter } from "./legal";
 import { Logo } from "./logo";
 import { formatWhen } from "./uiBits";
 import type { Auth, City } from "./api";
@@ -397,6 +398,7 @@ export function Shell({
           </Link>
         </header>
         <main>{children}</main>
+        <LegalFooter lang={lang} />
       </div>
     </div>
   );

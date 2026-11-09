@@ -4,6 +4,7 @@ import { api, type CitySummary, type Health } from "./api";
 import { t } from "./i18n";
 import { useLang } from "./lang";
 import { sourceLabel } from "./flows";
+import { medicalLink, medicalNote } from "./legal";
 import { retryLabel } from "./mapStyle";
 import { AqiDial, aqiTone, formatWhen, PageHead, Status } from "./uiBits";
 import "./home.css";
@@ -284,6 +285,10 @@ export function Home({ cityId, cityName }: { cityId: string; cityName: string })
             <div>
               <p className="hero-band">{band}</p>
               {action ? <p className="aqi-action">{t(lang, action)}</p> : null}
+              <p className="muted medical-note">
+                {medicalNote(lang)}{" "}
+                <Link to="/disclaimer">{medicalLink(lang)}</Link>
+              </p>
             </div>
           </div>
           <div className="row">

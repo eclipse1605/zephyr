@@ -3,6 +3,7 @@ WORKDIR /app
 COPY package.json bun.lock ./
 COPY packages ./packages
 COPY apps/api ./apps/api
+COPY fixtures ./fixtures
 RUN bun install --frozen-lockfile --filter @zephyr/api
 RUN bun run --filter @zephyr/domain build && bun run --filter @zephyr/server build && bun run --filter @zephyr/api build
 

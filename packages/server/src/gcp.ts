@@ -11,12 +11,39 @@ export function resolveProjectId(): string {
   );
 }
 
+export async function gcpAccessToken(): Promise<string | null> {
+  const key = process.env.FIREBASE_SERVICE_ACCOUNT_KEY?.trim();
+  if (!key && !process.env.K_SERVICE?.trim()) return null;
+  try {
+    return await googleAccessToken(key);
+  } catch {
+    return null;
+  }
+}
+
+export async function internalAuthHeaders(audience: string): Promise<Record<string, string>> {
+  if (process.env.K_SERVICE?.trim()) {
+    const url = `http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=${encodeURIComponent(audience)}`;
+    try {
+      const res = await fetch(url, { headers: { "Metadata-Flavor": "Google" }, signal: AbortSignal.timeout(2_000) });
+      if (res.ok) {
+        const token = (await res.text()).trim();
+        if (token) return { authorization: `Bearer ${token}` };
+      }
+    } catch {
+      return {};
+    }
+  }
+  const secret = process.env.CRON_SECRET?.trim();
+  if (secret) return { authorization: `Bearer ${secret}` };
+  return {};
+}
+
 export async function publishReport(reportId: string): Promise<boolean> {
   const project = resolveProjectId();
   const topic = process.env.ZEPHYR_REPORT_TOPIC?.trim();
-  const key = process.env.FIREBASE_SERVICE_ACCOUNT_KEY?.trim();
-  if (!project || !topic || !key) return false;
-  const token = await googleAccessToken(key);
+  const token = await gcpAccessToken();
+  if (!project || !topic || !token) return false;
   const data = Buffer.from(JSON.stringify({ reportId })).toString("base64");
   const res = await fetch(`https://pubsub.googleapis.com/v1/projects/${project}/topics/${topic}:publish`, {
     method: "POST",
@@ -30,9 +57,8 @@ export async function insertHourly(
   rows: Array<{ stationId: string; cityId: string; observedAt: string; pm25: number | null; aqi: number | null; source: string }>,
 ): Promise<boolean> {
   const project = resolveProjectId();
-  const key = process.env.FIREBASE_SERVICE_ACCOUNT_KEY?.trim();
-  if (!project || !key || rows.length === 0) return false;
-  const token = await googleAccessToken(key);
+  const token = await gcpAccessToken();
+  if (!project || !token || rows.length === 0) return false;
   const res = await fetch(`https://bigquery.googleapis.com/bigquery/v2/projects/${project}/datasets/air/tables/station_readings/insertAll`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
@@ -54,7 +80,7 @@ export async function insertHourly(
 }
 
 export async function syncState(store: FileStore): Promise<void> {
-  if (process.env.ZEPHYR_STORE !== "gcp") return;
+  if (!resolveProjectId()) return;
   const db = await store.read();
   await insertHourly(db.hourly);
 }

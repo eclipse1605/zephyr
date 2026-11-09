@@ -4,7 +4,7 @@ This document describes the Zephyr product, the code layout, the Terraform modul
 
 The module in this document is the tree under `infra/terraform`. Current values in `terraform.tfvars` target project `zephyr-512319` in region `asia-south1`. Resource names use the prefix `zephyr` unless this document gives a full name.
 
-**Status of the cloud path:** Terraform can create the Google Cloud objects listed below. The application does not yet use all of them at runtime. The last section lists the gaps. A first apply on an empty project will still fail unless you fix those gaps first.
+**Status of the cloud path:** the module matches the Compose layout: Cloud SQL for Postgres, a GCS bucket for photos, Cloud Run, Scheduler, and Pub/Sub. Do not run `terraform apply` until Artifact Registry images are pushed and any third-party API-key secret you mount has a version. The database password secret is created by the module. `FIREBASE_SERVICE_ACCOUNT_KEY` is not required on Cloud Run.
 
 ---
 
@@ -89,6 +89,8 @@ Rate limits exist on report create (10 per IP per hour) and on public API keys (
 | Path                            | Role                                                                                                       |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------- |
 | `POST /internal/tick`           | Ingest stations, fuse evidence, promote incidents, send pending notifications, sync optional BigQuery rows |
+| `POST /internal/catalog`        | Confirms the monitored set is the twelve cities. It does not download a world catalog                      |
+| `POST /internal/wind`           | Reserved for the wind field. It does not fetch a grid yet                                                   |
 | `POST /internal/pubsub/reports` | Decode a Pub/Sub push and classify the report                                                              |
 | `POST /internal/pubsub/dlq`     | Record a dead-lettered payload                                                                             |
 | `POST /internal/tasks/notify`   | Log a Cloud Tasks delivery                                                                                 |
@@ -120,7 +122,7 @@ Promotion table. Flagged photos do not count. A null sensor or satellite is abse
 
 ### Server package (`packages/server`)
 
-File store (default) or Firestore + GCS when `ZEPHYR_STORE=gcp`. Report photos go to the file store or to `gs://<bucket>/photos/<id>`. Live ingest talks to OpenAQ, WAQI, CPCB, Open-Meteo wind, OpenStreetMap Overpass, Earth Engine, and Google Air Quality when keys exist. Gemini classifies photos, drafts work orders, writes zone briefs, and runs the operator copilot. If Gemini is missing or the call fails, a heuristic or offline answer is used. The code now calls `gemini-3.8-flash`.
+File store (default local), Postgres plus object storage when `ZEPHYR_STORE=postgres`, or Firestore plus GCS when `ZEPHYR_STORE=gcp`. Cloud Run uses Postgres and the data bucket. Live ingest talks to OpenAQ, WAQI, CPCB, Open-Meteo wind, OpenStreetMap Overpass, Earth Engine, and Google Air Quality when keys exist. Gemini classifies photos, drafts work orders, writes zone briefs, and runs the operator copilot. If Gemini is missing or the call fails, a heuristic or offline answer is used. The code now calls `gemini-3.8-flash`.
 
 ---
 
@@ -154,215 +156,84 @@ Docker Compose builds the same three images, shares a data volume, and can start
 
 ## 4. How Terraform is structured
 
-| File               | Role                                                                                                                  |
-| ------------------ | --------------------------------------------------------------------------------------------------------------------- |
-| `versions.tf`      | Terraform `>= 1.5`, provider `hashicorp/google ~> 6.0`, project and region on the provider                            |
-| `variables.tf`     | Inputs                                                                                                                |
-| `terraform.tfvars` | Current values for `zephyr-512319`                                                                                    |
-| `main.tf`          | APIs, buckets, Firestore, BigQuery, Pub/Sub, service accounts, Cloud Run, IAM, Scheduler, Tasks, secrets, optional VM |
-| `lb.tf`            | Global HTTP load balancer, CDN backend bucket, uptime check                                                           |
-| `outputs.tf`       | `lb_ip`, `api_url`, `worker_url`, bucket names, topic, dataset                                                        |
+| File               | Role                                                                                          |
+| ------------------ | --------------------------------------------------------------------------------------------- |
+| `versions.tf`      | Terraform `>= 1.5`, Google and Google Beta `~> 6.0`, random provider                         |
+| `variables.tf`     | Inputs, including `db_tier` and optional `lb_domain`                                          |
+| `terraform.tfvars` | Current values for `zephyr-512319`                                                            |
+| `main.tf`          | APIs, Cloud SQL, buckets, Artifact Registry, BigQuery, Pub/Sub, Cloud Run, IAM, Scheduler     |
+| `lb.tf`            | Global HTTP load balancer, optional HTTPS certificate, CDN, SPA 404 rewrite, uptime check     |
+| `outputs.tf`       | Load balancer address, service URLs, buckets, topic, dataset, SQL connection, image registry  |
 
-There is no remote state backend. `terraform apply` writes `terraform.tfstate` in `infra/terraform`.
+There is no remote state backend. Do not run `terraform apply` on the empty project until the images exist in Artifact Registry and you have added versions for any third-party key you intend to mount. The module creates a `DATABASE_URL` version. It does not mount the empty API-key shells.
+
+### Chosen mapping
+
+| Local | Google Cloud |
+| --- | --- |
+| Docker Postgres | Cloud SQL for Postgres 16. Cloud Run reaches it through the Cloud SQL socket. `ZEPHYR_STORE=postgres`. |
+| Object storage for report photos | GCS data bucket (`ZEPHYR_BUCKET`). The web bucket is separate and sits behind Cloud CDN. |
+| Firebase Auth emulator | Identity Platform email/password on this project. Cloud Run does not receive a service-account JSON key. |
+| API and worker | Cloud Run. The API is public. The worker is internal. |
+| Compose tick | Cloud Scheduler `zephyr-tick` every 30 minutes, `POST /internal/tick`. |
+| Catalog | Cloud Scheduler `zephyr-catalog` hourly, `POST /internal/catalog`. The handler keeps the twelve-city list. |
+| Wind | Cloud Scheduler `zephyr-wind` every 6 hours, `POST /internal/wind`. The handler does not draw a field yet. |
+| Ingest dead letters | Pub/Sub DLQ topic, push subscription, and publisher/subscriber IAM for the Pub/Sub service agent. |
+| API keys | Secret Manager shells. They are not mounted until a version exists. The database URL is the exception. |
+
+Firestore is not created. Do not run Cloud SQL and a Firestore database together.
 
 ### Inputs
 
-| Variable             | Current value                                                | Meaning                                                         |
-| -------------------- | ------------------------------------------------------------ | --------------------------------------------------------------- |
-| `project_id`         | `zephyr-512319`                                              | Target project                                                  |
-| `region`             | `asia-south1`                                                | Mumbai. Firestore, Cloud Run, Tasks, buckets, BigQuery use this |
-| `name_prefix`        | `zephyr`                                                     | Name stem for most resources                                    |
-| `operator_emails`    | set in tfvars                                                | Passed into the API as `OPERATOR_EMAILS`                        |
-| `api_image`          | `asia-south1-docker.pkg.dev/zephyr-512319/zephyr/api:latest` | Cloud Run API image                                             |
-| `worker_image`       | same repo, `worker:latest`                                   | Cloud Run worker image                                          |
-| `enable_optional_vm` | `false` (default)                                            | Create an `e2-micro` that curls `/internal/tick`                |
-
-The module does not create the Artifact Registry repository named `zephyr`. You create that repository and push images before the Cloud Run services run Zephyr code. Until then the default image is `gcr.io/cloudrun/hello`.
-
-`disable_on_destroy` is false on `google_project_service`. A later destroy leaves the Google APIs enabled.
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `project_id` | required | Target project |
+| `region` | `asia-south1` | Cloud SQL, Cloud Run, buckets, BigQuery |
+| `name_prefix` | `zephyr` | Name stem |
+| `operator_emails` | empty | `OPERATOR_EMAILS` on the API |
+| `api_image` / `worker_image` | hello image | Replace with Artifact Registry tags before a real apply |
+| `db_tier` | `db-f1-micro` | Cloud SQL tier |
+| `lb_domain` | empty | When set, Terraform adds a managed certificate and an HTTPS forwarding rule |
+| `enable_optional_vm` | `false` | Optional e2-micro that curls the tick |
 
 ---
 
 ## 5. What `terraform apply` creates
 
-All names below assume the current tfvars.
+### Runtime
 
-### Enabled Google APIs
+Cloud SQL instance `zephyr-pg`, database `zephyr`, user `zephyr`. The password is random and stored only in the `DATABASE_URL` secret. Public IP is on so the Cloud SQL connector can attach, with encrypted connections and no authorized networks.
 
-Cloud Run, Pub/Sub, Firestore, BigQuery, Cloud Storage, Cloud Scheduler, Cloud Tasks, Secret Manager, Compute, IAM, Artifact Registry, Cloud Logging, Cloud Monitoring.
+API and worker Cloud Run services mount that socket, set `ZEPHYR_STORE=postgres`, read `DATABASE_URL` from Secret Manager, and set `ZEPHYR_BUCKET` to the data bucket. `ZEPHYR_DEV_AUTH` is `0`. Neither service has `FIREBASE_SERVICE_ACCOUNT_KEY`. On Cloud Run, Google API calls use the attached service account. The metadata server issues the token. Worker ingress stays internal. Scheduler, Pub/Sub push, and the API service account can invoke it. The API sends a Cloud Run identity token when `K_SERVICE` is set.
 
-### Storage
+Artifact Registry repository `zephyr` in the same region. The Cloud Run service agent can read it.
 
-| Resource    | Name                 | Notes                                                                                                                               |
-| ----------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| Data bucket | `zephyr-512319-data` | Uniform access. `force_destroy = false`. Intended for photos and uploaded fixtures                                                  |
-| Web bucket  | `zephyr-512319-web`  | Uniform access. Public `roles/storage.objectViewer` for `allUsers`. Website index and 404 are `index.html`. Destroy deletes objects |
-
-### Datastores
-
-| Resource         | Name                               | Notes                                                     |
-| ---------------- | ---------------------------------- | --------------------------------------------------------- |
-| Firestore        | `(default)`, native, `asia-south1` | Apply fails if the project already has a default database |
-| BigQuery dataset | `air`                              | Same region                                               |
-| Table            | `air.station_readings`             | Day partition on `observed_at`, cluster `city_id`         |
-| Table            | `air.exposure_snapshots`           | Day partition, cluster `uid`                              |
-| Table            | `air.ward_burden_hourly`           | Day partition                                             |
-| Table            | `air.google_aq_history`            | Day partition                                             |
-
-### Messaging and jobs
-
-| Resource            | Name                        | Notes                                                                                                                       |
-| ------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| Topic               | `zephyr-report-events`      | API publishes `{ reportId }`                                                                                                |
-| Topic               | `zephyr-report-events-dlq`  | Dead-letter topic                                                                                                           |
-| Push subscription   | `zephyr-report-events-push` | Worker `/internal/pubsub/reports`. Ack 60 s. Retry 10 s–600 s. Dead-letter after 5 attempts. OIDC from `zephyr-pubsub-push` |
-| Push subscription   | `zephyr-dlq-record`         | Worker `/internal/pubsub/dlq`                                                                                               |
-| Cloud Tasks queue   | `zephyr-alerts`             | Default retry settings                                                                                                      |
-| Cloud Scheduler job | `zephyr-tick`               | `*/30 * * * *` in `Asia/Kolkata`. `POST` worker `/internal/tick` with OIDC from `zephyr-scheduler`. Attempt deadline 320 s  |
-
-### Identity
-
-| Service account      | Used by                         |
-| -------------------- | ------------------------------- |
-| `zephyr-api`         | Cloud Run API                   |
-| `zephyr-worker`      | Cloud Run worker                |
-| `zephyr-scheduler`   | Scheduler (and the optional VM) |
-| `zephyr-pubsub-push` | Pub/Sub OIDC tokens             |
-
-API IAM: Firestore user, object admin on the data bucket, publisher on the report topic, Secret Manager accessor, Cloud Tasks enqueuer.
-
-Worker IAM: Firestore user, BigQuery data editor and job user, object viewer on the data bucket, publisher on the report topic, Secret Manager accessor, Cloud Tasks enqueuer.
-
-### Cloud Run
-
-| Service         | Ingress       | Scale | Port | Invokers                             |
-| --------------- | ------------- | ----- | ---- | ------------------------------------ |
-| `zephyr-api`    | All traffic   | 0–10  | 8080 | `allUsers`                           |
-| `zephyr-worker` | Internal only | 0–20  | 8080 | scheduler SA, pubsub-push SA, API SA |
-
-API environment: `ZEPHYR_PROJECT_ID`, `ZEPHYR_BUCKET`, `ZEPHYR_REPORT_TOPIC`, `OPERATOR_EMAILS`, `WORKER_URL`.
-
-Worker environment: same project, bucket, and topic, plus `ZEPHYR_BQ_DATASET=air`.
-
-Neither service sets `ZEPHYR_STORE`, `ZEPHYR_FIXTURES`, `ZEPHYR_DEV_AUTH`, or Secret Manager volume mounts.
+Identity Platform email/password sign-in is enabled.
 
 ### Edge
 
-Global external Application Load Balancer, HTTP only (port 80):
+HTTP load balancer on the reserved address. `/api/*` goes to the API. Other paths go to the web bucket with Cloud CDN. A 404 from that bucket is rewritten to `/index.html` so client routes such as `/map` load the app. HTTPS is created only when `lb_domain` is set.
 
-```
-http://<zephyr-lb-ip>/
-    /api/*  → serverless NEG → Cloud Run zephyr-api
-    /*      → backend bucket zephyr-512319-web + Cloud CDN
-```
+### Secrets
 
-Reserved address: `zephyr-lb-ip`. Uptime check every 60 s: `GET http://<lb_ip>/api/v1/health`. No SSL certificate. No HTTPS proxy. No alert policy on the check.
+Mounted: `DATABASE_URL`.
 
-The API `run.app` URL is also public because ingress is `INGRESS_TRAFFIC_ALL` and `allUsers` can invoke it.
+Empty shells, not mounted: `OPENAQ_API_KEY`, `WAQI_API_TOKEN`, `CPCB_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_AIR_QUALITY_API_KEY`, `GOOGLE_PLACES_API_KEY`, `GOOGLE_SPEECH_API_KEY`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_FROM`, `WHATSAPP_CLOSURE_SECRET`.
 
-### Secrets (empty shells)
+### IAM
 
-Secret Manager entries with no versions:
-
-`OPENAQ_API_KEY`, `WAQI_API_TOKEN`, `CPCB_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_AIR_QUALITY_API_KEY`, `GOOGLE_PLACES_API_KEY`, `GOOGLE_SPEECH_API_KEY`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_FROM`, `WHATSAPP_CLOSURE_SECRET`, `FIREBASE_SERVICE_ACCOUNT_KEY`.
-
-### Optional VM
-
-Off unless `enable_optional_vm = true`. Then Terraform creates `zephyr-tick-vm` (`e2-micro`, Debian 12, `asia-south1-a`, default VPC, external IP). A cron job curls the worker tick every 30 minutes. The VM is a rubric IaaS checkbox. Scheduler already does the same call.
+API and worker: `roles/cloudsql.client`, object admin on the data bucket, Secret Manager accessor, Pub/Sub publisher on the report topic. Worker also has BigQuery data editor and job user. The Pub/Sub service agent can publish to the dead-letter topic and subscribe to the report push subscription.
 
 ---
 
-## 6. Intended runtime on Google Cloud
+## 6. Apply blockers
 
-```
-                    :80  zephyr-lb-ip
-                   /                  \
-              /api/*                   /*
-                 │                     │
-         Cloud Run API            GCS web bucket + CDN
-                 │
-                 │ publish reportId
-                 ▼
-         Pub/Sub zephyr-report-events
-                 │  (5 failures)
-                 ▼
-         zephyr-report-events-dlq
-                 │
-                 ▼
-         Cloud Run worker (internal)
-              ▲        ▲
-              │        │
-     Scheduler tick    Cloud Tasks notify (queue exists)
-```
-
-Same-project Cloud Scheduler, Pub/Sub, and Cloud Tasks may call a Cloud Run service that has internal ingress on the default `run.app` URL. That is why the worker can stay internal.
-
-After a healthy apply and image push, this is the intended loop:
-
-1. A user opens `http://<lb_ip>/` and gets the static UI from the web bucket.
-2. The UI calls `/api/v1/...`. The load balancer sends those paths to the API.
-3. A committed report publishes to `zephyr-report-events`. Pub/Sub pushes the envelope to the worker. The worker classifies the photo and may promote an incident.
-4. Every 30 minutes (India time) Scheduler posts `/internal/tick`. The worker refreshes stations, ward burden, fusion, and alerts.
-5. Failed report deliveries move to the DLQ topic. The second subscription records them. An operator can replay from `/pipeline`.
-
----
-
-## 7. How this differs from local run
-
-| Topic             | Local / Docker                                | After Terraform apply (as written)                                                                                                                                                             |
-| ----------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Store             | Shared files (`ZEPHYR_STORE=file`)            | `ZEPHYR_STORE` is unset, so each Cloud Run instance uses its own empty disk and falls back to files                                                                                            |
-| Fixtures          | `fixtures/` on disk                           | Not copied into the image. Upload to the data bucket does not feed `readFile`                                                                                                                  |
-| Report handoff    | Shared store plus optional HTTP to the worker | Pub/Sub push is the path that can reach the internal worker                                                                                                                                    |
-| API → worker HTTP | Same Docker network or localhost              | Worker ingress is internal. Another Cloud Run service is not treated as internal unless egress goes through a VPC. The API has no VPC connector, so `WORKER_URL` fetch from the API is dropped |
-| Secrets           | `.env`                                        | Secret shells exist. Processes still read `process.env`. Nothing mounts the secrets                                                                                                            |
-| Auth              | `ZEPHYR_DEV_AUTH=1` demo tokens               | That flag is unset. The UI still mints `demo:` / `operator:` tokens. The API will reject them                                                                                                  |
-| Web hosting       | Vite or nginx in Compose                      | Public GCS bucket + HTTP load balancer. Client routes such as `/map` 404 on the backend bucket unless you add a Cloud CDN rewrite or host the UI elsewhere                                     |
-
-`packages/server` authenticates to Firestore, GCS, Pub/Sub, and BigQuery with `FIREBASE_SERVICE_ACCOUNT_KEY` (a JSON key), not with the Cloud Run service account. The IAM bindings on `zephyr-api` and `zephyr-worker` stay unused until that code path changes.
-
----
-
-## 8. Apply blockers and deploy gaps
-
-Fix these before you treat the project as deploy-ready.
-
-1. **Dead-letter IAM.** Grant the Pub/Sub service agent `service-<PROJECT_NUMBER>@gcp-sa-pubsub.iam.gserviceaccount.com` `roles/pubsub.publisher` on `zephyr-report-events-dlq` before you create the push subscription, and `roles/pubsub.subscriber` on `zephyr-report-events-push` so it can acknowledge after a forward. The module does not create those bindings. Subscription create is often rejected without the publisher binding.
-
-2. **Artifact Registry repository.** Create `asia-south1-docker.pkg.dev/zephyr-512319/zephyr`, then build and push `api:latest` and `worker:latest`. Bake `fixtures/` into the worker image or change the tick to read them from GCS.
-
-3. **Environment on Cloud Run.** Set `ZEPHYR_STORE=gcp` if you want Firestore. Mount the Secret Manager secrets as environment variables. Set `ZEPHYR_FIXTURES` if fixtures live in the image. Set `ZEPHYR_DEV_AUTH` only if you still want demo tokens in production (do not do that for a public URL).
-
-4. **API to worker.** Keep report processing on Pub/Sub, or give the API Direct VPC egress / a connector so `WORKER_URL` works. Scheduler and Pub/Sub do not need that change.
-
-5. **HTTPS and SPA routing.** Add a certificate and an HTTPS proxy if you want TLS. Add a URL-map path that serves `index.html` for client routes, or serve the UI from Cloud Run.
-
-6. **Secret versions.** Add versions for the keys you will use. Minimum for a live tick: OpenAQ and/or WAQI. Gemini for classification and copilot. Firebase JSON key if the store stays on the current GCP client. CPCB, Places, Air Quality, Speech, Twilio, and WhatsApp are optional.
-
-7. **Firestore location.** Create the database only if the project has none. Location cannot change later.
-
-8. **State.** Add a GCS backend if more than one machine will run Terraform.
-
----
-
-## 9. Outputs after apply
-
-| Output         | Content                                      |
-| -------------- | -------------------------------------------- |
-| `lb_ip`        | Global HTTP address                          |
-| `api_url`      | Cloud Run API URI                            |
-| `worker_url`   | Cloud Run worker URI (internal callers only) |
-| `data_bucket`  | `zephyr-512319-data`                         |
-| `web_bucket`   | `zephyr-512319-web`                          |
-| `report_topic` | `zephyr-report-events`                       |
-| `bq_dataset`   | `air`                                        |
-
----
-
-## 10. Commands (after the gaps above)
+1. Push `api` and `worker` images to the Artifact Registry repository this module creates before Cloud Run can serve Zephyr.
+2. Add a secret version, then an env reference, for each third-party key you want live. An empty shell cannot be mounted.
+3. Set `lb_domain` and point DNS at `lb_ip` before expecting HTTPS.
+4. Do not apply this module and a second stack that also creates Firestore `(default)`.
 
 ```bash
-# Images (repository must exist)
 docker build -f apps/api/Dockerfile -t asia-south1-docker.pkg.dev/zephyr-512319/zephyr/api:latest .
 docker build -f apps/worker/Dockerfile -t asia-south1-docker.pkg.dev/zephyr-512319/zephyr/worker:latest .
 docker push asia-south1-docker.pkg.dev/zephyr-512319/zephyr/api:latest
@@ -370,19 +241,17 @@ docker push asia-south1-docker.pkg.dev/zephyr-512319/zephyr/worker:latest
 
 cd infra/terraform
 terraform init
-terraform apply
+terraform plan
 ```
 
-Upload the web `dist/` tree to `zephyr-512319-web`. Add Secret Manager versions. Confirm `/api/v1/health` on port 80 of `lb_ip`.
+`terraform apply` stays a manual step after that plan is the one you want.
 
-Local development (not Google Cloud):
+Local development:
 
 ```bash
 bun install
-bun test
-bun run dev:worker
-bun run dev:api
-bun run dev:web
+cp .env.example .env
+bun run dev
 ```
 
-Open `http://localhost:5173`.
+Open `http://127.0.0.1:5173`. Worker `:8081`, API `:8080`.

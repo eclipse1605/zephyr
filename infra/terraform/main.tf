@@ -2,7 +2,8 @@ locals {
   apis = [
     "run.googleapis.com",
     "pubsub.googleapis.com",
-    "firestore.googleapis.com",
+    "sqladmin.googleapis.com",
+    "identitytoolkit.googleapis.com",
     "bigquery.googleapis.com",
     "storage.googleapis.com",
     "cloudscheduler.googleapis.com",
@@ -14,6 +15,10 @@ locals {
     "logging.googleapis.com",
     "monitoring.googleapis.com",
   ]
+}
+
+data "google_project" "current" {
+  project_id = var.project_id
 }
 
 resource "google_project_service" "apis" {
@@ -51,12 +56,87 @@ resource "google_storage_bucket_iam_member" "web_public" {
   member = "allUsers"
 }
 
-resource "google_firestore_database" "ops" {
-  project     = var.project_id
-  name        = "(default)"
-  location_id = var.region
-  type        = "FIRESTORE_NATIVE"
-  depends_on  = [google_project_service.apis]
+resource "google_artifact_registry_repository" "zephyr" {
+  location      = var.region
+  repository_id = var.name_prefix
+  format        = "DOCKER"
+  depends_on    = [google_project_service.apis]
+}
+
+resource "google_artifact_registry_repository_iam_member" "run_reader" {
+  location   = google_artifact_registry_repository.zephyr.location
+  repository = google_artifact_registry_repository.zephyr.repository_id
+  role       = "roles/artifactregistry.reader"
+  member     = "serviceAccount:service-${data.google_project.current.number}@serverless-robot-prod.iam.gserviceaccount.com"
+}
+
+resource "google_project_service_identity" "pubsub" {
+  provider   = google-beta
+  project    = var.project_id
+  service    = "pubsub.googleapis.com"
+  depends_on = [google_project_service.apis]
+}
+
+resource "random_password" "db" {
+  length  = 24
+  special = false
+}
+
+resource "google_sql_database_instance" "zephyr" {
+  name                = "${var.name_prefix}-pg"
+  database_version    = "POSTGRES_16"
+  region              = var.region
+  deletion_protection = true
+
+  settings {
+    tier = var.db_tier
+    ip_configuration {
+      ipv4_enabled = true
+      ssl_mode     = "ENCRYPTED_ONLY"
+    }
+  }
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_sql_database" "zephyr" {
+  name     = "zephyr"
+  instance = google_sql_database_instance.zephyr.name
+}
+
+resource "google_sql_user" "zephyr" {
+  name     = "zephyr"
+  instance = google_sql_database_instance.zephyr.name
+  password = random_password.db.result
+}
+
+resource "google_secret_manager_secret" "database_url" {
+  secret_id = "DATABASE_URL"
+  replication {
+    auto {}
+  }
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_secret_manager_secret_version" "database_url" {
+  secret = google_secret_manager_secret.database_url.id
+  secret_data = format(
+    "postgres://zephyr:%s@/zephyr?host=/cloudsql/%s",
+    random_password.db.result,
+    google_sql_database_instance.zephyr.connection_name,
+  )
+}
+
+resource "google_identity_platform_config" "auth" {
+  project = var.project_id
+  sign_in {
+    allow_duplicate_emails = false
+    email {
+      enabled           = true
+      password_required = true
+    }
+  }
+  depends_on = [google_project_service.apis]
 }
 
 resource "google_bigquery_dataset" "air" {
@@ -179,9 +259,32 @@ resource "google_cloud_run_v2_service" "api" {
       min_instance_count = 0
       max_instance_count = 10
     }
+    volumes {
+      name = "cloudsql"
+      cloud_sql_instance {
+        instances = [google_sql_database_instance.zephyr.connection_name]
+      }
+    }
     containers {
       image = var.api_image
       ports { container_port = 8080 }
+      volume_mounts {
+        name       = "cloudsql"
+        mount_path = "/cloudsql"
+      }
+      env {
+        name  = "ZEPHYR_STORE"
+        value = "postgres"
+      }
+      env {
+        name = "DATABASE_URL"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.database_url.secret_id
+            version = "latest"
+          }
+        }
+      }
       env {
         name  = "ZEPHYR_PROJECT_ID"
         value = var.project_id
@@ -199,13 +302,22 @@ resource "google_cloud_run_v2_service" "api" {
         value = var.operator_emails
       }
       env {
+        name  = "ZEPHYR_DEV_AUTH"
+        value = "0"
+      }
+      env {
         name  = "WORKER_URL"
         value = google_cloud_run_v2_service.worker.uri
       }
     }
   }
 
-  depends_on = [google_project_service.apis]
+  depends_on = [
+    google_project_service.apis,
+    google_secret_manager_secret_iam_member.api_database,
+    google_sql_database.zephyr,
+    google_sql_user.zephyr,
+  ]
 }
 
 resource "google_cloud_run_v2_service" "worker" {
@@ -219,9 +331,32 @@ resource "google_cloud_run_v2_service" "worker" {
       min_instance_count = 0
       max_instance_count = 20
     }
+    volumes {
+      name = "cloudsql"
+      cloud_sql_instance {
+        instances = [google_sql_database_instance.zephyr.connection_name]
+      }
+    }
     containers {
       image = var.worker_image
       ports { container_port = 8080 }
+      volume_mounts {
+        name       = "cloudsql"
+        mount_path = "/cloudsql"
+      }
+      env {
+        name  = "ZEPHYR_STORE"
+        value = "postgres"
+      }
+      env {
+        name = "DATABASE_URL"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.database_url.secret_id
+            version = "latest"
+          }
+        }
+      }
       env {
         name  = "ZEPHYR_PROJECT_ID"
         value = var.project_id
@@ -229,6 +364,10 @@ resource "google_cloud_run_v2_service" "worker" {
       env {
         name  = "ZEPHYR_BUCKET"
         value = google_storage_bucket.data.name
+      }
+      env {
+        name  = "ZEPHYR_FIXTURES"
+        value = "/app/fixtures"
       }
       env {
         name  = "ZEPHYR_REPORT_TOPIC"
@@ -241,7 +380,12 @@ resource "google_cloud_run_v2_service" "worker" {
     }
   }
 
-  depends_on = [google_project_service.apis]
+  depends_on = [
+    google_project_service.apis,
+    google_secret_manager_secret_iam_member.worker_database,
+    google_sql_database.zephyr,
+    google_sql_user.zephyr,
+  ]
 }
 
 resource "google_cloud_run_v2_service_iam_member" "api_public" {
@@ -297,6 +441,8 @@ resource "google_pubsub_subscription" "report_events_push" {
     minimum_backoff = "10s"
     maximum_backoff = "600s"
   }
+
+  depends_on = [google_pubsub_topic_iam_member.dlq_publisher]
 }
 
 resource "google_pubsub_subscription" "dlq_record" {
@@ -311,8 +457,8 @@ resource "google_pubsub_subscription" "dlq_record" {
 }
 
 resource "google_cloud_tasks_queue" "alerts" {
-  name     = "${var.name_prefix}-alerts"
-  location = var.region
+  name       = "${var.name_prefix}-alerts"
+  location   = var.region
   depends_on = [google_project_service.apis]
 }
 
@@ -327,7 +473,43 @@ resource "google_cloud_scheduler_job" "tick" {
     uri         = "${google_cloud_run_v2_service.worker.uri}/internal/tick"
     oidc_token {
       service_account_email = google_service_account.scheduler.email
-      audience               = google_cloud_run_v2_service.worker.uri
+      audience              = google_cloud_run_v2_service.worker.uri
+    }
+  }
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_cloud_scheduler_job" "catalog" {
+  name             = "${var.name_prefix}-catalog"
+  schedule         = "0 * * * *"
+  time_zone        = "Asia/Kolkata"
+  attempt_deadline = "180s"
+
+  http_target {
+    http_method = "POST"
+    uri         = "${google_cloud_run_v2_service.worker.uri}/internal/catalog"
+    oidc_token {
+      service_account_email = google_service_account.scheduler.email
+      audience              = google_cloud_run_v2_service.worker.uri
+    }
+  }
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_cloud_scheduler_job" "wind" {
+  name             = "${var.name_prefix}-wind"
+  schedule         = "0 */6 * * *"
+  time_zone        = "Asia/Kolkata"
+  attempt_deadline = "180s"
+
+  http_target {
+    http_method = "POST"
+    uri         = "${google_cloud_run_v2_service.worker.uri}/internal/wind"
+    oidc_token {
+      service_account_email = google_service_account.scheduler.email
+      audience              = google_cloud_run_v2_service.worker.uri
     }
   }
 
@@ -347,7 +529,6 @@ resource "google_secret_manager_secret" "keys" {
     "TWILIO_AUTH_TOKEN",
     "TWILIO_WHATSAPP_FROM",
     "WHATSAPP_CLOSURE_SECRET",
-    "FIREBASE_SERVICE_ACCOUNT_KEY",
   ])
   secret_id = each.value
   replication {
@@ -357,9 +538,9 @@ resource "google_secret_manager_secret" "keys" {
 }
 
 # IAM — API
-resource "google_project_iam_member" "api_firestore" {
+resource "google_project_iam_member" "api_sql" {
   project = var.project_id
-  role    = "roles/datastore.user"
+  role    = "roles/cloudsql.client"
   member  = "serviceAccount:${google_service_account.api.email}"
 }
 
@@ -391,9 +572,9 @@ resource "google_cloud_tasks_queue_iam_member" "api_tasks" {
 }
 
 # IAM — Worker
-resource "google_project_iam_member" "worker_firestore" {
+resource "google_project_iam_member" "worker_sql" {
   project = var.project_id
-  role    = "roles/datastore.user"
+  role    = "roles/cloudsql.client"
   member  = "serviceAccount:${google_service_account.worker.email}"
 }
 
@@ -411,7 +592,7 @@ resource "google_project_iam_member" "worker_bq_job" {
 
 resource "google_storage_bucket_iam_member" "worker_objects" {
   bucket = google_storage_bucket.data.name
-  role   = "roles/storage.objectViewer"
+  role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${google_service_account.worker.email}"
 }
 
@@ -426,6 +607,30 @@ resource "google_secret_manager_secret_iam_member" "worker_secrets" {
   secret_id = each.value.secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.worker.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "api_database" {
+  secret_id = google_secret_manager_secret.database_url.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.api.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "worker_database" {
+  secret_id = google_secret_manager_secret.database_url.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.worker.email}"
+}
+
+resource "google_pubsub_topic_iam_member" "dlq_publisher" {
+  topic  = google_pubsub_topic.report_events_dlq.name
+  role   = "roles/pubsub.publisher"
+  member = "serviceAccount:${google_project_service_identity.pubsub.email}"
+}
+
+resource "google_pubsub_subscription_iam_member" "dlq_subscriber" {
+  subscription = google_pubsub_subscription.report_events_push.name
+  role         = "roles/pubsub.subscriber"
+  member       = "serviceAccount:${google_project_service_identity.pubsub.email}"
 }
 
 resource "google_cloud_tasks_queue_iam_member" "worker_tasks" {

@@ -26,9 +26,18 @@ app.use("/internal", (req, res, next) => {
     cronHeader: req.header("x-cron-secret"),
     secret: process.env.CRON_SECRET,
     emulator: Boolean(process.env.PUBSUB_EMULATOR_HOST?.trim()),
+    cloudRun: Boolean(process.env.K_SERVICE?.trim()),
   });
   if (!ok) return res.status(401).json({ error: "unauthorized" });
   next();
+});
+
+app.post("/internal/catalog", (_req, res) => {
+  res.json({ ok: true, scope: "twelve-cities" });
+});
+
+app.post("/internal/wind", (_req, res) => {
+  res.json({ ok: true, wind: "pending" });
 });
 
 app.post("/internal/tick", async (_req, res) => {

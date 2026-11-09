@@ -832,9 +832,14 @@ v1.post("/system/tick", async (req, res) => {
 v1.post("/whatsapp/inbound", async (req, res) => {
   const signature = req.header("x-twilio-signature");
   const authToken = process.env.TWILIO_AUTH_TOKEN?.trim() ?? "";
+  const accountSid = process.env.TWILIO_ACCOUNT_SID?.trim() ?? "";
+  const fromNumber = process.env.TWILIO_WHATSAPP_FROM?.trim() ?? "";
+  if (!authToken || !accountSid || !fromNumber) {
+    return res.type("text/xml").send("<Response><Message>WhatsApp reporting is not enabled.</Message></Response>");
+  }
   const params = Object.fromEntries(Object.entries(req.body ?? {}).map(([k, v]) => [k, String(v)]));
   const url = `${req.protocol}://${req.get("host")}${req.originalUrl}`;
-  if (authToken && !verifyTwilioSignature(url, params, authToken, signature)) {
+  if (!verifyTwilioSignature(url, params, authToken, signature)) {
     return res.status(403).json({ error: "bad_signature" });
   }
   const body = req.body ?? {};

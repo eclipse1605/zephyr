@@ -43,8 +43,17 @@ export class PostgresStore extends FileStore {
         doc jsonb not null
       )
     `;
-    const exists = this.s3 ? await this.s3.bucketExists(this.bucket).catch(() => false) : true;
-    if (this.s3 && !exists) await this.s3.makeBucket(this.bucket);
+    if (this.s3) {
+      const exists = await this.s3.bucketExists(this.bucket).catch(() => false);
+      if (!exists) {
+        try {
+          await this.s3.makeBucket(this.bucket);
+        } catch (err) {
+          const code = err && typeof err === "object" && "code" in err ? String((err as { code?: string }).code) : "";
+          if (code !== "BucketAlreadyOwnedByYou" && code !== "BucketAlreadyExists") throw err;
+        }
+      }
+    }
   }
 
   override async read(): Promise<Db> {

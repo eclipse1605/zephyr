@@ -35,8 +35,9 @@ export function authorizeInternal(opts: {
   cronHeader?: string | null;
   secret?: string | null;
   emulator?: boolean;
+  cloudRun?: boolean;
 }): boolean {
-  if (opts.emulator) return true;
+  if (opts.emulator || opts.cloudRun) return true;
   const secret = opts.secret?.trim() ?? "";
   if (!secret) return false;
   const bearer = (opts.authorization ?? "").replace(/^Bearer\s+/i, "").trim();

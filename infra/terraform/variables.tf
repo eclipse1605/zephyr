@@ -4,13 +4,13 @@ variable "project_id" {
 }
 
 variable "region" {
-  type        = string
-  default     = "asia-south1"
+  type    = string
+  default = "asia-south1"
 }
 
 variable "name_prefix" {
-  type        = string
-  default     = "zephyr"
+  type    = string
+  default = "zephyr"
 }
 
 variable "operator_emails" {
@@ -35,4 +35,16 @@ variable "enable_optional_vm" {
   type        = bool
   default     = false
   description = "Create an e2-micro that only publishes the tick (rubric IaaS checkbox)"
+}
+
+variable "db_tier" {
+  type        = string
+  default     = "db-f1-micro"
+  description = "Cloud SQL machine tier"
+}
+
+variable "lb_domain" {
+  type        = string
+  default     = ""
+  description = "Hostname for the managed HTTPS certificate. Empty keeps the load balancer on HTTP."
 }

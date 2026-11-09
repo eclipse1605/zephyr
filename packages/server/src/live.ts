@@ -4,6 +4,7 @@ import {
   parseCpcbRecords,
   parseWaqiStations,
   latLngToH3,
+  mergeStations,
   openAqPollutantsUsable,
   pollutantsFromOpenAqLatestRows,
   pollutantsFromOpenAqSensors,
@@ -12,7 +13,8 @@ import {
   type StationReading,
   type StationSource,
 } from "@zephyr/domain";
-import { sleep } from "./util.js";
+import { noteOpenAq429, openAqRequestKey, takeOpenAqSlot } from "./openaqBudget.js";
+export { openAqBudgetStatus } from "./openaqBudget.js";
 
 export type FeedStatus = { source: StationSource; ok: boolean; error: string | null; count: number };
 
@@ -52,8 +54,8 @@ type OpenAqLocationRow = {
 };
 
 function openAqLocationLimit(): number {
-  const n = Number(process.env.OPENAQ_LOCATION_LIMIT ?? 40);
-  return Number.isFinite(n) ? Math.min(100, Math.max(1, Math.floor(n))) : 40;
+  const n = Number(process.env.OPENAQ_LOCATION_LIMIT ?? 4);
+  return Number.isFinite(n) ? Math.min(4, Math.max(1, Math.floor(n))) : 4;
 }
 
 function openAqConcurrency(): number {
@@ -84,33 +86,22 @@ export function openAqConfigured(): boolean {
   return openAqApiKeys().length > 0;
 }
 
-let openAqKeyCursor = 0;
-
 async function openAqGet<T>(path: string): Promise<T> {
-  const keys = openAqApiKeys();
-  if (!keys.length) throw new Error("OPENAQ_API_KEY not configured");
+  const key = openAqRequestKey(openAqApiKeys());
+  if (!key) throw new Error("OPENAQ_API_KEY not configured");
+  if (!takeOpenAqSlot()) throw new Error("OpenAQ budget");
 
-  const start = openAqKeyCursor++ % keys.length;
-  let lastStatus: number | null = null;
-
-  for (let attempt = 0; attempt < keys.length; attempt++) {
-    const key = keys[(start + attempt) % keys.length]!;
-    const res = await fetch(`${OPENAQ_BASE}${path}`, {
-      headers: { "X-API-Key": key },
-      signal: AbortSignal.timeout(25_000),
-    });
-    if (res.status === 429 || res.status === 401) {
-      lastStatus = res.status;
-      await sleep(400 * (attempt + 1));
-      continue;
-    }
-    if (!res.ok) throw new Error(`OpenAQ ${res.status}`);
-    return res.json() as Promise<T>;
+  const res = await fetch(`${OPENAQ_BASE}${path}`, {
+    headers: { "X-API-Key": key },
+    signal: AbortSignal.timeout(25_000),
+  });
+  if (res.status === 429) {
+    const retry = res.headers.get("retry-after");
+    noteOpenAq429();
+    throw new Error(retry ? `OpenAQ 429 retry-after ${retry}` : "OpenAQ 429");
   }
-
-  if (lastStatus === 429) throw new Error("OpenAQ 429");
-  if (lastStatus === 401) throw new Error("OpenAQ 401");
-  throw new Error("OpenAQ request failed");
+  if (!res.ok) throw new Error(`OpenAQ ${res.status}`);
+  return res.json() as Promise<T>;
 }
 
 async function mapConcurrent<T, R>(items: T[], concurrency: number, fn: (item: T) => Promise<R>): Promise<R[]> {
@@ -202,6 +193,16 @@ async function fetchWaqi(city: CityConfig): Promise<StationReading[]> {
   const res = await fetch(url, { signal: AbortSignal.timeout(20_000) });
   if (!res.ok) throw new Error(`WAQI ${res.status}`);
   return parseWaqiStations(await res.json(), city.id);
+}
+
+/** Live map display only. Callers must not write this into the store. */
+export async function fetchLiveWaqi(city: CityConfig) {
+  try {
+    const batch = await fetchWaqi(city);
+    return mergeStations(batch, city.aqiScale, new Date());
+  } catch {
+    return [];
+  }
 }
 
 async function fetchCpcb(city: CityConfig): Promise<StationReading[]> {

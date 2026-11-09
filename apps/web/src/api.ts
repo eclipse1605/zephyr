@@ -57,6 +57,7 @@ export type Station = {
   lng: number;
   aqi: number | null;
   online?: boolean;
+  sourceFeed?: string;
   h3?: string;
   incidentId?: string;
   incident?: MapIncident | null;
@@ -85,7 +86,7 @@ export type UpwindSource = {
 export type ZoneView = {
   h3: string;
   cityId?: string;
-  nearestStation?: { id?: string; name?: string; aqi?: number | null } | null;
+  nearestStation?: { id?: string; name?: string; aqi?: number | null; sourceFeed?: string } | null;
   distanceKm?: number | null;
   advisory?: {
     band?: string;

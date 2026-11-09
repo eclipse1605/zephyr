@@ -58,6 +58,10 @@ docker compose up --build
 
 Web on :5173, API :8080, worker :8081, Pub/Sub emulator :8085.
 
+## Feeds
+
+Demo fixtures are the legal default. Live mode may store OpenAQ and CPCB. It does not store WAQI. See `docs/feeds.md`.
+
 ## GCP
 
 1. Copy `infra/terraform/terraform.tfvars.example` → `terraform.tfvars`

@@ -8,6 +8,7 @@ import { useLang } from "./lang";
 import { MAP_DARK, retryLabel } from "./mapStyle";
 import { enumText, sourceLabel } from "./flows";
 import { aqiTone, PageHead } from "./uiBits";
+import { attachWind } from "./windField";
 import "./map.css";
 const OFFLINE_ZOOM = 12;
 const NEAR_PX = 40;
@@ -193,6 +194,7 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
   const markers = useRef<MapLibre.Marker[]>([]);
   const navigate = useNavigate();
   const [pitched, setPitched] = useState(false);
+  const [windOn, setWindOn] = useState(true);
   const [mapEpoch, setMapEpoch] = useState(0);
   const [counts, setCounts] = useState<LegendCounts>(EMPTY_COUNTS);
   const [mapNote, setMapNote] = useState<"loading" | "error" | null>("loading");
@@ -219,22 +221,24 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
   useEffect(() => {
     if (!mapRef.current || !city) return;
     const container = mapRef.current;
+    const center = city.center;
     let alive = true;
     let map: MapLibre.Map | null = null;
+    let readyOnce = false;
+    let bootTimer = 0;
     void import("maplibre-gl").then((maplibregl) => {
       if (!alive) return;
       ml.current = maplibregl;
       map = new maplibregl.Map({
         container,
         style: MAP_DARK,
-        center: [city.center.lng, city.center.lat],
+        center: [center.lng, center.lat],
         zoom: 1.5,
-        projection: { type: "globe" },
-      } as MapLibre.MapOptions);
-      (map as MapLibre.Map & { setProjection?: (projection: { type: "globe" }) => void }).setProjection?.({ type: "globe" });
-      map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
+      });
       mapObj.current = map;
       const modelMap = map;
+      // Epoch opens wind/pins as soon as the map exists; raster waits for style.
+      setMapEpoch((n) => Math.max(1, n + 1));
       map.on("click", (event) => {
         const target = event.originalEvent.target;
         if (target instanceof Element && target.closest(".maplibregl-marker")) return;
@@ -251,33 +255,73 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
           })
           .catch(() => undefined);
       });
-      map.on("style.load", () => {
+      const addRaster = () => {
         if (!alive) return;
-        const layer = rasterRef.current;
-        if (!modelMap.getSource("model-raster")) {
-          modelMap.addSource("model-raster", {
-            type: "raster",
-            tiles: [`/api/v1/model/tiles/${layer}/{z}/{x}/{y}`],
-            tileSize: 256,
-            maxzoom: 8,
-            attribution: "Open-Meteo / CAMS",
-          });
-          modelMap.addLayer({ id: "model-raster", type: "raster", source: "model-raster", paint: { "raster-opacity": 0.72 } });
+        try {
+          const layer = rasterRef.current;
+          if (!modelMap.getSource("model-raster")) {
+            modelMap.addSource("model-raster", {
+              type: "raster",
+              tiles: [`/api/v1/model/tiles/${layer}/{z}/{x}/{y}`],
+              tileSize: 256,
+              maxzoom: 8,
+              attribution: "Open-Meteo / CAMS",
+            });
+            modelMap.addLayer({ id: "model-raster", type: "raster", source: "model-raster", paint: { "raster-opacity": 0.72 } });
+          }
+        } catch {
+          return;
         }
-        modelMap.easeTo({ center: [city.center.lng, city.center.lat], zoom: 9.5, duration: 1600, essential: true });
-        modelMap.once("moveend", () => {
-          if (alive) setMapEpoch((n) => n + 1);
-        });
+        if (!readyOnce) {
+          readyOnce = true;
+          window.setTimeout(() => {
+            if (!alive) return;
+            modelMap.easeTo({ center: [center.lng, center.lat], zoom: 9.5, duration: 1600, essential: true });
+          }, 0);
+        }
+      };
+      map.on("style.load", () => {
+        try {
+          (modelMap as MapLibre.Map & { setProjection?: (projection: { type: "globe" }) => void }).setProjection?.({ type: "globe" });
+        } catch {
+          // flat map is fine if globe projection is unavailable
+        }
+        // Projection can rebuild the style; add the raster on the next task.
+        window.setTimeout(addRaster, 0);
       });
+      map.on("load", addRaster);
+      map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
+      bootTimer = window.setTimeout(addRaster, 1200);
     });
     return () => {
       alive = false;
+      window.clearTimeout(bootTimer);
       markers.current.forEach((m) => m.remove());
       markers.current = [];
       map?.remove();
       mapObj.current = null;
     };
-  }, [city]);
+  }, [cityId, city?.center.lat, city?.center.lng]);
+
+  useEffect(() => {
+    const map = mapObj.current;
+    if (!map || !windOn || mapEpoch === 0) return;
+    let cancel = () => {};
+    let stopped = false;
+    const start = (grid: { cells?: Array<{ lat: number; lng: number; u: number; v: number }> } | null) => {
+      if (stopped || !grid?.cells?.length) return;
+      cancel();
+      cancel = attachWind(map, { cells: grid.cells });
+    };
+    void fetch("/api/v1/model/wind")
+      .then((res) => (res.ok ? res.json() : null))
+      .then(start)
+      .catch(() => undefined);
+    return () => {
+      stopped = true;
+      cancel();
+    };
+  }, [windOn, mapEpoch, cityId]);
 
   useEffect(() => {
     const map = mapObj.current;
@@ -459,6 +503,9 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
       <PageHead kicker={city?.name ?? ""} title={t(lang, "map")}>
         <button type="button" onClick={() => setRaster((layer) => (layer === "aqi" ? "pm25" : "aqi"))}>
           {raster === "aqi" ? "US AQI" : "PM2.5"}
+        </button>
+        <button type="button" aria-pressed={windOn} onClick={() => setWindOn((on) => !on)}>
+          {windOn ? "Wind on" : "Wind off"}
         </button>
         <button type="button" onClick={() => setPitched((v) => !v)}>
           {pitched ? t(lang, "flat") : t(lang, "buildings")}

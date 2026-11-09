@@ -54,6 +54,7 @@ import {
   internalAuthHeaders,
   cachedModelPoint,
   cachedModelTile,
+  readWindGrid,
 } from "@zephyr/server";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -198,6 +199,11 @@ v1.get("/model/tiles/:layer/:z/:x/:y", async (req, res) => {
     const message = err instanceof Error ? err.message : "tile";
     res.status(message === "zoom" || message === "tile" ? 404 : 502).json({ error: message });
   }
+});
+
+v1.get("/model/wind", async (_req, res) => {
+  const grid = await readWindGrid(DATA, path.join(FIXTURES, "wind", "sample.json"));
+  res.json(grid);
 });
 
 v1.get("/model/point", async (req, res) => {

@@ -156,10 +156,8 @@ export class GcpStore extends FileStore {
 
   private async auth(): Promise<string> {
     if (this.token && Date.now() - this.tokenAt < 45 * 60 * 1000) return this.token;
-    const key = process.env.FIREBASE_SERVICE_ACCOUNT_KEY?.trim();
-    if (!key) throw new Error("missing FIREBASE_SERVICE_ACCOUNT_KEY");
     this.project();
-    this.token = await googleAccessToken(key);
+    this.token = await googleAccessToken(process.env.FIREBASE_SERVICE_ACCOUNT_KEY);
     this.tokenAt = Date.now();
     return this.token;
   }

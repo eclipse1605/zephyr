@@ -25,3 +25,11 @@ output "report_topic" {
 output "bq_dataset" {
   value = google_bigquery_dataset.air.dataset_id
 }
+
+output "sql_connection" {
+  value = google_sql_database_instance.zephyr.connection_name
+}
+
+output "artifact_registry" {
+  value = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.zephyr.repository_id}"
+}

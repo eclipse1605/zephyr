@@ -500,8 +500,22 @@ function parseServiceAccount(raw: string): { client_email: string; private_key: 
   return { client_email: sa.client_email, private_key: sa.private_key.replace(/\\n/g, "\n") };
 }
 
-export async function googleAccessToken(serviceAccountJson: string): Promise<string> {
-  const sa = parseServiceAccount(serviceAccountJson);
+async function metadataAccessToken(): Promise<string> {
+  const res = await fetch(
+    "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token",
+    { headers: { "Metadata-Flavor": "Google" }, signal: AbortSignal.timeout(2_000) },
+  );
+  if (!res.ok) throw new Error(`metadata token ${res.status}`);
+  const body = (await res.json()) as { access_token?: string };
+  if (!body.access_token) throw new Error("metadata token empty");
+  return body.access_token;
+}
+
+/** A JSON key is optional. On Cloud Run the attached service account is enough. */
+export async function googleAccessToken(serviceAccountJson?: string | null): Promise<string> {
+  const raw = serviceAccountJson?.trim();
+  if (!raw) return metadataAccessToken();
+  const sa = parseServiceAccount(raw);
   const now = Math.floor(Date.now() / 1000);
   const header = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url");
   const claim = Buffer.from(

@@ -32,6 +32,15 @@ resource "google_compute_url_map" "main" {
   name            = "${var.name_prefix}-url-map"
   default_service = google_compute_backend_bucket.web.id
 
+  default_custom_error_response_policy {
+    error_service = google_compute_backend_bucket.web.id
+    error_response_rule {
+      match_response_codes   = ["404"]
+      path                   = "/index.html"
+      override_response_code = 200
+    }
+  }
+
   host_rule {
     hosts        = ["*"]
     path_matcher = "all"
@@ -61,15 +70,39 @@ resource "google_compute_global_forwarding_rule" "http" {
   load_balancing_scheme = "EXTERNAL_MANAGED"
 }
 
+resource "google_compute_managed_ssl_certificate" "main" {
+  count = var.lb_domain == "" ? 0 : 1
+  name  = "${var.name_prefix}-cert"
+  managed {
+    domains = [var.lb_domain]
+  }
+}
+
+resource "google_compute_target_https_proxy" "main" {
+  count            = var.lb_domain == "" ? 0 : 1
+  name             = "${var.name_prefix}-https-proxy"
+  url_map          = google_compute_url_map.main.id
+  ssl_certificates = [google_compute_managed_ssl_certificate.main[0].id]
+}
+
+resource "google_compute_global_forwarding_rule" "https" {
+  count                 = var.lb_domain == "" ? 0 : 1
+  name                  = "${var.name_prefix}-https-fwd"
+  ip_address            = google_compute_global_address.lb.address
+  port_range            = "443"
+  target                = google_compute_target_https_proxy.main[0].id
+  load_balancing_scheme = "EXTERNAL_MANAGED"
+}
+
 resource "google_monitoring_uptime_check_config" "api_health" {
   display_name = "${var.name_prefix}-api-health"
   timeout      = "10s"
   period       = "60s"
 
   http_check {
-    path         = "/api/v1/health"
-    port         = 80
-    use_ssl      = false
+    path           = "/api/v1/health"
+    port           = 80
+    use_ssl        = false
     request_method = "GET"
   }
 

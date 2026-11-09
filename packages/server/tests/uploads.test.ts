@@ -49,5 +49,6 @@ describe("report ids and photo paths", () => {
     expect(authorizeInternal({ authorization: "Bearer cron", secret: "cron", emulator: false })).toBe(true);
     expect(authorizeInternal({ authorization: undefined, secret: "", emulator: false })).toBe(false);
     expect(authorizeInternal({ secret: "", emulator: true })).toBe(true);
+    expect(authorizeInternal({ secret: "", cloudRun: true })).toBe(true);
   });
 });

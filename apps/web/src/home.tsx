@@ -263,8 +263,6 @@ export function Home({ cityId, cityName }: { cityId: string; cityName: string })
     );
   }
 
-  const share = current.shareInPoor == null ? "—" : `${Math.round(current.shareInPoor * 100)}%`;
-  const ratio = current.equity?.ratio == null ? "—" : current.equity.ratio.toFixed(2);
   const tone = aqiTone(current.cityAqi);
   const band = t(lang, BAND_KEY[tone] ?? "bandUnknown");
   const numericAqi = current.cityAqi != null && !Number.isNaN(current.cityAqi);
@@ -274,7 +272,6 @@ export function Home({ cityId, cityName }: { cityId: string; cityName: string })
   const monitoredRows = [...current.topWards]
     .sort((a, b) => b.aqi - a.aqi)
     .filter((ward, index, rows) => rows.findIndex((item) => item.name === ward.name) === index);
-
   const shownAqi = numericAqi ? Math.round(current.cityAqi as number) : null;
 
   return (
@@ -299,22 +296,6 @@ export function Home({ cityId, cityName }: { cityId: string; cityName: string })
         <AqiDial aqi={current.cityAqi} caption={t(lang, "medianNote", { n: current.liveStationCount })} />
       </section>
       <ul className="stat-strip">
-        <li>
-          <span className="stat-k">{t(lang, "people")}</span>
-          <strong>{Number(current.peopleInPoor).toLocaleString(lang)}</strong>
-          <span className="muted">
-            {t(lang, "shareOf", { share })} · {t(lang, "uncovered", { n: Number(current.uncoveredPopulation).toLocaleString(lang) })}
-          </span>
-        </li>
-        {monitored >= 8 ? (
-          <li>
-            <span className="stat-k">{t(lang, "equity")}</span>
-            <strong>{ratio}</strong>
-            <span className="muted">
-              {t(lang, "equityRatioShown", { n: monitored })} · {t(lang, "equityNote")}
-            </span>
-          </li>
-        ) : null}
         <li>
           <span className="stat-k">{t(lang, "hotspots")}</span>
           <strong>{current.openIncidentCount}</strong>

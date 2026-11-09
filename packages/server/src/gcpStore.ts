@@ -377,6 +377,12 @@ export class GcpStore extends FileStore {
 }
 
 export async function openStore(dataDir: string): Promise<FileStore> {
+  if (process.env.ZEPHYR_STORE === "postgres") {
+    const { PostgresStore } = await import("./pgStore.js");
+    const store = new PostgresStore();
+    await store.ensure();
+    return store;
+  }
   if (process.env.ZEPHYR_STORE !== "gcp") return new FileStore(dataDir);
   try {
     const store = new GcpStore(dataDir);

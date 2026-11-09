@@ -1,4 +1,25 @@
 services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: zephyr
+      POSTGRES_PASSWORD: zephyr
+      POSTGRES_DB: zephyr
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zephyr -d zephyr"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  minio:
+    image: adobe/s3mock:latest
+    environment:
+      initialBuckets: zephyr-photos
+    ports:
+      - "9000:9090"
+
   api:
     build:
       context: .
@@ -12,14 +33,25 @@ services:
         required: false
     environment:
       PORT: "8080"
+      ZEPHYR_STORE: postgres
+      DATABASE_URL: postgres://zephyr:zephyr@postgres:5432/zephyr
+      S3_ENDPOINT: minio
+      S3_PORT: "9090"
+      S3_ACCESS_KEY: zephyr
+      S3_SECRET_KEY: zephyr-secret
+      S3_BUCKET: zephyr-photos
       ZEPHYR_DATA_DIR: /data
       ZEPHYR_FIXTURES: /fixtures
       WORKER_URL: http://worker:8081
     volumes:
-      - zephyr-data:/data
       - ./fixtures:/fixtures:ro
     depends_on:
-      - worker
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+      worker:
+        condition: service_started
 
   worker:
     build:
@@ -34,11 +66,22 @@ services:
         required: false
     environment:
       PORT: "8081"
+      ZEPHYR_STORE: postgres
+      DATABASE_URL: postgres://zephyr:zephyr@postgres:5432/zephyr
+      S3_ENDPOINT: minio
+      S3_PORT: "9090"
+      S3_ACCESS_KEY: zephyr
+      S3_SECRET_KEY: zephyr-secret
+      S3_BUCKET: zephyr-photos
       ZEPHYR_DATA_DIR: /data
       ZEPHYR_FIXTURES: /fixtures
     volumes:
-      - zephyr-data:/data
       - ./fixtures:/fixtures:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
 
   web:
     build:
@@ -55,6 +98,3 @@ services:
     command: gcloud beta emulators pubsub start --host-port=0.0.0.0:8085
     ports:
       - "8085:8085"
-
-volumes:
-  zephyr-data:

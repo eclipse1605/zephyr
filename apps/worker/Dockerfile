@@ -1,4 +1,4 @@
-FROM oven/bun:1 AS build
+FROM oven/bun:1.4.4 AS build
 WORKDIR /app
 COPY package.json bun.lock ./
 COPY packages ./packages
@@ -6,7 +6,7 @@ COPY apps/worker ./apps/worker
 RUN bun install --frozen-lockfile --filter @zephyr/worker
 RUN bun run --filter @zephyr/domain build && bun run --filter @zephyr/server build && bun run --filter @zephyr/worker build
 
-FROM oven/bun:1
+FROM oven/bun:1.4.4
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build /app /app

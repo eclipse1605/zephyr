@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { latLngToCell } from "h3-js";
+import { cellToLatLng, latLngToCell } from "h3-js";
 import maplibregl from "maplibre-gl";
 import { api, type City, type MapIncident, type Station } from "./api";
 import { t } from "./i18n";
@@ -36,6 +36,7 @@ type MapPayload = {
   }>;
   fires: Array<{ lat: number; lng: number; h3?: string }>;
   incidents: MapIncident[];
+  surfaces: Array<{ h3: string; publishedAqi: number | null }>;
 };
 
 const LAYER_NAME: Record<"stations" | "wards" | "fires", Record<string, string>> = {
@@ -317,6 +318,21 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
         if (incident) placeIncident(place, incident, s.lng, s.lat, lang, navigate, seen);
       }
 
+      for (const cell of data.surfaces) {
+        if (cell.publishedAqi == null) continue;
+        let center: [number, number];
+        try {
+          center = cellToLatLng(cell.h3);
+        } catch {
+          continue;
+        }
+        const el = document.createElement("button");
+        el.type = "button";
+        el.className = `pin hex tone-${aqiTone(cell.publishedAqi)}`;
+        el.textContent = String(Math.round(cell.publishedAqi));
+        place(el, center[1], center[0], `<a href="/zones/${esc(cell.h3)}">${esc(t(lang, "zoneLink"))}</a>`);
+      }
+
       for (const f of data.fires) {
         const el = document.createElement("button");
         el.type = "button";
@@ -393,6 +409,7 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
         stations: stationRes.status === "fulfilled" ? stationRes.value.stations : [],
         wards: wardRes.status === "fulfilled" ? wardRes.value.wards : [],
         fires: fireRes.status === "fulfilled" ? fireRes.value.fires : [],
+        surfaces: stationRes.status === "fulfilled" ? stationRes.value.surfaces ?? [] : [],
         incidents: [
           ...(stationRes.status === "fulfilled" ? stationRes.value.incidents ?? [] : []),
           ...(fireRes.status === "fulfilled" ? fireRes.value.incidents ?? [] : []),

@@ -13,7 +13,7 @@ const FIXTURES = resolveFromRoot(ROOT, process.env.ZEPHYR_FIXTURES, path.join(RO
 const PORT = resolveListenPort("worker");
 
 const store = await openStore(DATA);
-const app = express();
+export const app = express();
 app.use(express.json({ limit: "4mb" }));
 
 app.get("/health", (_req, res) => {
@@ -117,10 +117,12 @@ app.post("/internal/tasks/notify", async (req, res) => {
 console.log(JSON.stringify({ event: "worker_boot", data: DATA, fixtures: FIXTURES, port: PORT }));
 await store.ensure();
 console.log(JSON.stringify({ event: "store_ready" }));
-app.listen(PORT, () => {
-  console.log(`zephyr worker listening on :${PORT}`);
-});
-// Bootstrap after listen so health checks are not blocked by fixture ingest.
-void runTick({ store, fixturesRoot: FIXTURES })
-  .then((r) => console.log(JSON.stringify({ event: "bootstrap_tick", ...r })))
-  .catch((err) => console.error("bootstrap_tick_failed", err));
+if (process.env.ZEPHYR_NO_LISTEN !== "1") {
+  app.listen(PORT, () => {
+    console.log(`zephyr worker listening on :${PORT}`);
+  });
+  // Bootstrap after listen so health checks are not blocked by fixture ingest.
+  void runTick({ store, fixturesRoot: FIXTURES })
+    .then((r) => console.log(JSON.stringify({ event: "bootstrap_tick", ...r })))
+    .catch((err) => console.error("bootstrap_tick_failed", err));
+}

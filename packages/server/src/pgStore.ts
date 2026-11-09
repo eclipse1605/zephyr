@@ -1,7 +1,7 @@
 import { Client } from "minio";
 import postgres from "postgres";
 import { containedPhotoPath } from "./uploads.js";
-import { FileStore, emptyDb } from "./store.js";
+import { FileStore, emptyDb, type StoredReport } from "./store.js";
 
 type Db = Awaited<ReturnType<FileStore["read"]>>;
 
@@ -60,6 +60,42 @@ export class PostgresStore extends FileStore {
       insert into zephyr_state (id, doc)
       values (1, ${this.sql.json(db as never)})
       on conflict (id) do update set doc = excluded.doc
+    `;
+  }
+
+  override async saveReport(report: StoredReport): Promise<void> {
+    await this.ensure();
+    const rows = await this.sql`select 1 from zephyr_state where id = 1`;
+    if (!rows.length) {
+      const db = emptyDb();
+      db.reports[report.id] = report;
+      await this.write(db);
+      return;
+    }
+    await this.sql`
+      update zephyr_state
+      set doc = jsonb_set(doc, array['reports', ${report.id}], ${this.sql.json(report as never)}::jsonb, true)
+      where id = 1
+    `;
+  }
+
+  override async pushPendingMessage(message: { id: string; type: string; body: unknown }): Promise<void> {
+    await this.ensure();
+    const rows = await this.sql`select 1 from zephyr_state where id = 1`;
+    if (!rows.length) {
+      const db = emptyDb();
+      db.pendingMessages.push(message);
+      await this.write(db);
+      return;
+    }
+    await this.sql`
+      update zephyr_state
+      set doc = jsonb_set(
+        doc,
+        '{pendingMessages}',
+        coalesce(doc->'pendingMessages', '[]'::jsonb) || ${this.sql.json([message] as never)}::jsonb
+      )
+      where id = 1
     `;
   }
 

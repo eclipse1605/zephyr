@@ -64,6 +64,8 @@ a:hover { text-decoration: underline; text-underline-offset: 0.18em; }
 
 .shell-main {
   min-width: 0;
+  max-width: 100%;
+  overflow-x: clip;
   padding: 24px 28px 48px;
 }
 
@@ -190,7 +192,7 @@ h1 {
   align-items: stretch;
 }
 .card-feature { grid-column: 1 / -1; }
-.grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+.grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); }
 
 .card {
   background: var(--surface);

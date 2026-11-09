@@ -5,6 +5,7 @@ import { DiaryPage, OperatorPage, PipelinePage, ReportPage, TrackPage, ZonePage 
 import { Home } from "./home";
 import { LANGUAGES, langForCity } from "./i18n";
 import { LangContext } from "./lang";
+import { DisclaimerPage, PrivacyPage, TermsPage } from "./legal";
 import { MapPage } from "./mapPage";
 import { Shell } from "./shell";
 
@@ -127,6 +128,9 @@ export function App() {
           <Route path="/diary" element={<DiaryPage cityId={cityId} cities={cityList} auth={auth} login={login} />} />
           <Route path="/operator" element={<OperatorPage auth={auth} cityId={cityId} cities={cityList} login={login} />} />
           <Route path="/pipeline" element={<PipelinePage auth={auth} cityId={cityId} cities={cityList} login={login} />} />
+          <Route path="/privacy" element={<PrivacyPage />} />
+          <Route path="/terms" element={<TermsPage />} />
+          <Route path="/disclaimer" element={<DisclaimerPage />} />
         </Routes>
       </Shell>
     </LangContext.Provider>

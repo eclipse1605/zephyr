@@ -28,6 +28,7 @@
       "name": "@zephyr/web",
       "version": "0.1.0",
       "dependencies": {
+        "h3-js": "^4.5.0",
         "maplibre-gl": "^5.24.0",
         "react": "^19.0.0",
         "react-dom": "^19.0.0",

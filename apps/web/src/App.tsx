@@ -1,12 +1,27 @@
 import { useEffect, useMemo, useState } from "react";
-import { Route, Routes } from "react-router-dom";
+import { Route, Routes, useLocation } from "react-router-dom";
 import { ApiError, api, loadAuth, saveAuth, type Auth, type City } from "./api";
 import { DiaryPage, OperatorPage, PipelinePage, ReportPage, TrackPage, ZonePage } from "./flows";
 import { Home } from "./home";
-import { LANGUAGES } from "./i18n";
+import { LANGUAGES, langForCity } from "./i18n";
 import { LangContext } from "./lang";
 import { MapPage } from "./mapPage";
 import { Shell } from "./shell";
+
+const FALLBACK_CITIES: City[] = [
+  { id: "delhi", name: "New Delhi", group: "india", center: { lat: 28.6139, lng: 77.209 } },
+  { id: "mumbai", name: "Mumbai", group: "india", center: { lat: 19.076, lng: 72.8777 } },
+  { id: "kolkata", name: "Kolkata", group: "india", center: { lat: 22.5726, lng: 88.3639 } },
+  { id: "chennai", name: "Chennai", group: "india", center: { lat: 13.0827, lng: 80.2707 } },
+  { id: "bengaluru", name: "Bengaluru", group: "india", center: { lat: 12.9716, lng: 77.5946 } },
+  { id: "hyderabad", name: "Hyderabad", group: "india", center: { lat: 17.385, lng: 78.4867 } },
+  { id: "beijing", name: "Beijing", group: "brics", center: { lat: 39.9042, lng: 116.4074 } },
+  { id: "moscow", name: "Moscow", group: "brics", center: { lat: 55.7558, lng: 37.6173 } },
+  { id: "pretoria", name: "Pretoria", group: "brics", center: { lat: -25.7479, lng: 28.2293 } },
+  { id: "abu-dhabi", name: "Abu Dhabi", group: "brics", center: { lat: 24.4539, lng: 54.3773 } },
+  { id: "jakarta", name: "Jakarta", group: "brics", center: { lat: -6.2088, lng: 106.8456 } },
+  { id: "brasilia", name: "Brasília", group: "brics", center: { lat: -15.7975, lng: -47.8919 } },
+];
 
 async function syncAuthOperator(session: Auth): Promise<Auth> {
   try {
@@ -52,22 +67,27 @@ function useAuth() {
 
 export function App() {
   const { auth, login, logout } = useAuth();
+  const location = useLocation();
   const [cities, setCities] = useState<City[]>([]);
   const [cityId, setCityId] = useState("delhi");
-  const [lang, setLangState] = useState(() => {
+  const savedLang = () => {
     const saved = localStorage.getItem("zephyr.lang");
-    return saved && LANGUAGES.some((language) => language.id === saved) ? saved : "en";
-  });
+    return saved && LANGUAGES.some((language) => language.id === saved) ? saved : null;
+  };
+  const [lang, setLangState] = useState(() => savedLang() ?? langForCity("delhi"));
   const setLang = (next: string) => {
     localStorage.setItem("zephyr.lang", next);
     setLangState(next);
   };
 
   useEffect(() => {
-    api.cities().then((r) => setCities(r.cities)).catch(console.error);
+    api.cities().then((r) => setCities(r.cities)).catch(() => setCities([]));
   }, []);
 
-  const cityList = useMemo(() => cities, [cities]);
+  const cityList = useMemo(
+    () => (cities.length > 0 ? cities : FALLBACK_CITIES),
+    [cities],
+  );
 
   return (
     <LangContext.Provider value={{ lang, setLang }}>
@@ -75,12 +95,12 @@ export function App() {
         <Routes>
           <Route path="/" element={<Home cityId={cityId} cityName={cityList.find((city) => city.id === cityId)?.name ?? ""} />} />
           <Route path="/map" element={<MapPage cityId={cityId} cities={cityList} />} />
-          <Route path="/report" element={<ReportPage cityId={cityId} cities={cityList} auth={auth} />} />
+          <Route path="/report" element={<ReportPage key={`${location.key}-${cityId}`} cityId={cityId} cities={cityList} auth={auth} />} />
           <Route path="/track/:id" element={<TrackPage cityId={cityId} />} />
-          <Route path="/zones/:h3" element={<ZonePage cityId={cityId} auth={auth} />} />
+          <Route path="/zones/:h3" element={<ZonePage cityId={cityId} auth={auth} login={login} />} />
           <Route path="/diary" element={<DiaryPage cityId={cityId} cities={cityList} auth={auth} login={login} />} />
-          <Route path="/operator" element={<OperatorPage auth={auth} cityId={cityId} />} />
-          <Route path="/pipeline" element={<PipelinePage auth={auth} cityId={cityId} />} />
+          <Route path="/operator" element={<OperatorPage auth={auth} cityId={cityId} cities={cityList} login={login} />} />
+          <Route path="/pipeline" element={<PipelinePage auth={auth} cityId={cityId} cities={cityList} login={login} />} />
         </Routes>
       </Shell>
     </LangContext.Provider>

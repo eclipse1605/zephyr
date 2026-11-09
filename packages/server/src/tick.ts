@@ -161,7 +161,7 @@ export async function runTick(opts: TickOptions) {
           db.ingest.lastError = live.feeds.map((f) => `${f.source}: ${f.error}`).join("; ");
           continue;
         }
-        readings = live.readings;
+        readings = live.readings.filter((reading) => reading.sourceFeed !== "waqi");
       }
 
       const satellite = await loadSatelliteContext(city, opts.fixturesRoot, mode);

@@ -48,6 +48,8 @@ import {
   devSession,
   lookupEmulatorAccount,
   sessionFromAccount,
+  fetchLiveWaqi,
+  openAqBudgetStatus,
 } from "@zephyr/server";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -197,6 +199,7 @@ v1.get("/health", async (_req, res) => {
       firebase: Boolean(process.env.FIREBASE_SERVICE_ACCOUNT_KEY?.trim()),
     },
     devAuth: process.env.ZEPHYR_DEV_AUTH === "1",
+    openAq: openAqBudgetStatus(),
     authEmulator: process.env.AUTH_EMULATOR_PUBLIC_HOST?.trim() || process.env.FIREBASE_AUTH_EMULATOR_HOST?.trim() || null,
     firebaseProjectId: process.env.FIREBASE_PROJECT_ID?.trim() || null,
     ingest: db.ingest,
@@ -236,9 +239,14 @@ async function citySummaryHandler(req: express.Request, res: express.Response) {
 v1.get("/cities/:cityId/summary", citySummaryHandler);
 v1.get("/cities/:cityId/stations", async (req, res) => {
   const db = await store.read();
-  const stations = Object.values(db.stations).filter((s) => s.cityId === param(req.params.cityId));
+  const stations = Object.values(db.stations).filter((s) => s.cityId === param(req.params.cityId) && s.sourceFeed !== "waqi");
   const surfaces = Object.values(db.surfaceCells).filter((cell) => cell.cityId === param(req.params.cityId) && cell.basis === "reports");
-  res.json({ stations, surfaces });
+  let liveWaqi: typeof stations = [];
+  if (db.config.dataMode === "live") {
+    const city = getCity(param(req.params.cityId));
+    if (city?.stations.sources.includes("waqi")) liveWaqi = await fetchLiveWaqi(city) as typeof stations;
+  }
+  res.json({ stations: [...stations, ...liveWaqi], surfaces });
 });
 v1.get("/cities/:cityId/wards", async (req, res) => {
   const db = await store.read();

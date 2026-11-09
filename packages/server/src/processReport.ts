@@ -12,6 +12,7 @@ import {
 } from "@zephyr/domain";
 import { FileStore, newId, sha256 } from "./store.js";
 import { classifyPhoto, countsAsEvidence, draftWorkOrder } from "./gemini.js";
+import { refreshCitySurface } from "./surface.js";
 import { isRepeatHotspot } from "@zephyr/domain";
 
 export async function processReportMessage(store: FileStore, reportId: string) {
@@ -145,6 +146,7 @@ export async function processReportMessage(store: FileStore, reportId: string) {
     report.status = "promoted";
   }
 
+  refreshCitySurface(db, report.cityId, new Date());
   await store.write(db);
   return { report, decision, fusion };
 }

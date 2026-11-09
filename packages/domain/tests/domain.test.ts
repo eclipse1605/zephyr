@@ -28,6 +28,7 @@ import {
   openClosureWindow,
   applyClosureAnswer,
   computeFusionConfidence,
+  publishSurface,
   latLngToH3,
   getCity,
   CITIES,
@@ -300,6 +301,26 @@ describe("fusion", () => {
     assert.ok(r.finalConfidence > 0);
     assert.equal(r.satelliteWeight, 0);
     assert.ok(Math.abs(r.visualWeight + r.sensorWeight - 1) < 1e-9);
+  });
+
+  it("uses a station within range as the published number", () => {
+    const cell = publishSurface({ stationAqi: 40, modelAqi: 200, reportCount: 5, scale: "india" });
+    assert.equal(cell.publishedAqi, 40);
+    assert.equal(cell.basis, "station");
+    assert.equal(cell.visible, true);
+  });
+
+  it("raises the model one band after three reports and no station", () => {
+    const cell = publishSurface({ stationAqi: null, modelAqi: 80, reportCount: 3, scale: "india" });
+    assert.equal(cell.publishedAqi, 101);
+    assert.ok((cell.publishedAqi ?? 0) >= 80);
+    assert.equal(cell.basis, "reports");
+  });
+
+  it("does not move the number for fewer than three reports", () => {
+    const cell = publishSurface({ stationAqi: null, modelAqi: 80, reportCount: 2, scale: "india" });
+    assert.equal(cell.publishedAqi, 80);
+    assert.equal(cell.visible, false);
   });
 });
 

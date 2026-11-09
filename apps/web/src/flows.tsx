@@ -1392,6 +1392,13 @@ export function ZonePage({ cityId, auth, login }: { cityId: string; auth: Auth |
         title={station?.name ? t(lang, "areaNear", { name: station.name }) : t(lang, "thisArea")}
       />
       <div className="card">
+        {zone.surface?.publishedAqi != null ? (
+          <p>
+            {t(lang, "aqi")} {Math.round(zone.surface.publishedAqi)}
+            {" · "}
+            {sourceLabel(lang, "gemini")} {zone.surface.modelAqi == null ? "—" : Math.round(zone.surface.modelAqi)}
+          </p>
+        ) : null}
         <p className={forecastFailed || healthFailed ? "status" : undefined}>
           {forecastFailed || healthFailed
             ? `${station?.name ?? t(lang, "nearest")}: ${zoneUnconfirmed(lang)}`

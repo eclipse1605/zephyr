@@ -21,6 +21,7 @@ import {
   type DataMode,
 } from "@zephyr/domain";
 import { FileStore, newId, type StoredIncident } from "./store.js";
+import { publishedCityAqi, refreshCitySurface } from "./surface.js";
 import { anomalyForPoint, fetchCityStations, fetchOsmPlaces, fetchWind, loadSatelliteContext } from "./live.js";
 import { sleep } from "./util.js";
 import { rankUpwind } from "@zephyr/domain";
@@ -200,7 +201,8 @@ export async function runTick(opts: TickOptions) {
       }
 
       const liveAqis = merged.filter((s) => s.online && s.aqi != null).map((s) => s.aqi!);
-      const cityAqi = median(liveAqis);
+      refreshCitySurface(db, city.id, now);
+      const cityAqi = publishedCityAqi(db, city.id, median(liveAqis));
 
       const geo = await loadWards(opts.fixturesRoot, city.id);
       const joined = [];
@@ -334,13 +336,15 @@ export async function runTick(opts: TickOptions) {
         { id: diary.uid, name: "diary", population: 1, centroid: { lat: diary.lat, lng: diary.lng } },
         stations.map((s) => ({ id: s.id, lat: s.lat, lng: s.lng, aqi: s.aqi, online: s.online })),
       );
+      const surface = db.surfaceCells[diary.h3];
+      const aqi = surface?.publishedAqi ?? (joined.covered ? joined.aqi : null);
       db.exposure.push({
         uid: diary.uid,
         h3: diary.h3,
         cityId: diary.cityId,
         observedAt: now.toISOString(),
-        aqi: joined.covered ? joined.aqi : null,
-        band: joined.aqi != null ? bandForScale(joined.aqi, getCity(diary.cityId)?.aqiScale ?? "india") : null,
+        aqi,
+        band: aqi != null ? bandForScale(aqi, getCity(diary.cityId)?.aqiScale ?? "india") : null,
       });
     }
 
@@ -355,7 +359,8 @@ export async function runTick(opts: TickOptions) {
         stations.map((s) => ({ id: s.id, lat: s.lat, lng: s.lng, aqi: s.aqi, online: s.online })),
         unhealthyThreshold(city.aqiScale),
       );
-      const current = joined.covered ? joined.aqi : null;
+      const surface = db.surfaceCells[sub.h3];
+      const current = surface?.publishedAqi ?? (joined.covered ? joined.aqi : null);
       const previous = db.previousHexAqi[sub.h3] ?? null;
       const decision = shouldNotifyAlert({
         previousAqi: previous,

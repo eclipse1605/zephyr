@@ -97,6 +97,12 @@ export type ZoneView = {
   satelliteAvailable?: boolean;
   satelliteStatus?: string | null;
   satellite?: unknown;
+  surface?: {
+    publishedAqi: number | null;
+    modelAqi: number | null;
+    stationAqi: number | null;
+    basis: string;
+  } | null;
 };
 
 export type ForecastBlock = {
@@ -228,7 +234,7 @@ export const api = {
   health: () => req<Health>("/health"),
   cities: () => req<{ cities: City[] }>("/cities"),
   summary: (cityId: string) => req<CitySummary>(`/cities/${cityId}/summary`),
-  stations: (cityId: string) => req<{ stations: Station[]; incidents?: MapIncident[] }>(`/cities/${cityId}/stations`),
+  stations: (cityId: string) => req<{ stations: Station[]; incidents?: MapIncident[]; surfaces?: Array<{ h3: string; publishedAqi: number | null; basis: string }> }>(`/cities/${cityId}/stations`),
   wards: (cityId: string) => req<{ wards: Ward[] }>(`/cities/${cityId}/wards`),
   fires: (cityId: string) => req<{ fires: Fire[]; incidents?: MapIncident[] }>(`/cities/${cityId}/fires`),
   zone: (h3: string) => req<ZoneView>(`/zones/${encodeURIComponent(h3)}`),

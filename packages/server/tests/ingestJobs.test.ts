@@ -30,7 +30,16 @@ describe("ingest jobs", () => {
   test("a second catalog pass does not rewrite unchanged stations", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "zephyr-ingest-"));
     const store = new FileStore(root);
-    const opts = { store, fixturesRoot, dataDir: root, pageSize: 500 };
+    // Reject live wind immediately — default Open-Meteo fetch aborts at 25s and flakes CI (5s test timeout).
+    const opts = {
+      store,
+      fixturesRoot,
+      dataDir: root,
+      pageSize: 500,
+      fetchWindGrid: async () => {
+        throw new Error("offline");
+      },
+    };
     await enqueueIngestJobs(store);
     await drainIngestJobs(opts);
     const first = await store.read();
@@ -48,7 +57,16 @@ describe("ingest jobs", () => {
   test("killing mid-shard resumes from the saved cursor", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "zephyr-ingest-"));
     const store = new FileStore(root);
-    const opts = { store, fixturesRoot, dataDir: root, pageSize: 1, workerId: "a" };
+    const opts = {
+      store,
+      fixturesRoot,
+      dataDir: root,
+      pageSize: 1,
+      workerId: "a",
+      fetchWindGrid: async () => {
+        throw new Error("offline");
+      },
+    };
     await enqueueIngestJobs(store);
     const first = await claimNextJob(store, opts);
     expect(first?.kind).toBe("catalog");

@@ -36,6 +36,8 @@ export type IngestRunOptions = {
   leaseMs?: number;
   pageSize?: number;
   sampleWindPath?: string;
+  /** Tests inject this so drain never waits on Open-Meteo (25s abort). */
+  fetchWindGrid?: () => Promise<Array<{ lat: number; lng: number; u: number; v: number }>>;
 };
 
 type FixtureStation = {
@@ -576,6 +578,7 @@ export async function runClaimedJob(job: IngestJob, opts: IngestRunOptions): Pro
         await refreshWindGrid({
           dataDir,
           samplePath: opts.sampleWindPath ?? path.join(opts.fixturesRoot, "wind", "sample.json"),
+          fetchGrid: opts.fetchWindGrid,
         }).catch(() => undefined);
       }
       const db = await opts.store.read();

@@ -1,18 +1,44 @@
 .map-page {
   align-content: start;
+  gap: 0;
 }
 
 .map-frame { position: relative; }
 
+.map-toolbar {
+  position: absolute;
+  z-index: 3;
+  top: 12px;
+  left: 12px;
+  right: auto;
+  max-width: min(420px, calc(100% - 72px));
+  pointer-events: none;
+}
+
+.map-toolbar .head-actions {
+  pointer-events: auto;
+  box-shadow: 0 8px 24px color-mix(in srgb, #000 18%, transparent);
+  backdrop-filter: blur(10px);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+}
+
 .map-page #map {
-  height: calc(100dvh - 148px);
-  min-height: 420px;
+  height: calc(100dvh - 72px);
+  min-height: 480px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #0b1218;
+}
+
+.map-frame .wind-field {
+  transition: opacity 120ms linear;
+  will-change: opacity;
 }
 
 .map-note {
   position: absolute;
   z-index: 2;
-  top: 12px;
+  top: 58px;
   left: 12px;
   right: auto;
   max-width: min(420px, calc(100% - 24px));
@@ -126,12 +152,55 @@ button.pin {
   cursor: pointer;
 }
 
+.map-sources {
+  position: absolute;
+  z-index: 2;
+  top: 12px;
+  right: 56px;
+  left: auto;
+  margin: 0;
+  max-width: min(220px, calc(100% - 300px));
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface) 78%, transparent);
+  backdrop-filter: blur(8px);
+  font-size: 11px;
+  line-height: 1.35;
+  text-align: end;
+  pointer-events: none;
+}
+
 button.pin.station,
 .pin.station {
   color: #081018;
   border-radius: 999px;
-  padding: 2px 6px;
+  padding: 3px 7px;
   font-weight: 800;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.55);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+
+button.pin.station.is-dot,
+.pin.station.is-dot {
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  min-height: 14px;
+  padding: 0;
+  border-radius: 999px;
+  border-width: 2px;
+  font-size: 0;
+  line-height: 0;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35), 0 0 10px rgba(255, 180, 80, 0.35);
+}
+
+button.pin.station.is-dot.is-offline,
+.pin.station.is-dot.is-offline {
+  width: 8px;
+  height: 8px;
+  min-width: 8px;
+  min-height: 8px;
+  opacity: 0.7;
 }
 
 button.pin.station.tone-good,
@@ -186,6 +255,8 @@ button.pin.station.tone-severe:active,
   background: #d64532;
   color: #fff;
   border-color: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.65), 0 0 0 2px rgba(255, 255, 255, 0.85);
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.45);
 }
 
 button.pin.station.is-offline,
@@ -241,7 +312,28 @@ button.pin.station.is-stale:active,
 
 @media (max-width: 860px) {
   .map-page #map {
-    height: calc(100dvh - 220px);
-    min-height: 320px;
+    height: calc(100dvh - 120px);
+    min-height: 360px;
+  }
+
+  .map-sources {
+    top: auto;
+    right: 12px;
+    left: auto;
+    max-width: min(200px, 46vw);
+    text-align: end;
+    font-size: 10px;
+    /* Sit above the legend, clear of attribution. */
+    bottom: 64px;
+  }
+
+  .map-legend {
+    max-width: min(420px, calc(100% - 24px));
+    font-size: 11px;
+    gap: 6px 10px;
+  }
+
+  .map-toolbar {
+    max-width: min(320px, calc(100% - 64px));
   }
 }

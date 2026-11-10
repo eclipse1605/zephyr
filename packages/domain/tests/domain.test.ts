@@ -15,6 +15,7 @@ import {
   usAqiFromReadings,
   aqiBand,
   mergeStations,
+  collapseNearbyStations,
   enrichStation,
   stationOverLimit,
   isStationOnline,
@@ -107,6 +108,16 @@ describe("stations", () => {
     );
     assert.equal(merged.length, 1);
     assert.equal(merged[0]!.sourceFeed, "openaq");
+  });
+
+  it("collapses stored map pins within 250m preferring live over offline", () => {
+    const collapsed = collapseNearbyStations([
+      { id: "demo", name: "R.K. Puram", lat: 28.563, lng: 77.186, online: true, aqi: 307, sourceFeed: "openaq", lastSeen: "2026-10-11T10:00:00Z" },
+      { id: "live", name: "R K Puram, Delhi - DPCC", lat: 28.5633, lng: 77.1861, online: true, aqi: 500, sourceFeed: "openaq", lastSeen: "2026-10-11T11:00:00Z" },
+      { id: "offline", name: "R K Puram offline", lat: 28.5632, lng: 77.186, online: false, aqi: null, sourceFeed: "openaq", lastSeen: "2026-10-09T11:00:00Z" },
+    ]);
+    assert.equal(collapsed.length, 1);
+    assert.equal(collapsed[0]!.id, "live");
   });
 
   it("uses CPCB sourceAqi when concentrations are missing", () => {
@@ -591,6 +602,12 @@ describe("h3 and cities", () => {
     assert.ok(getCity("delhi"));
     assert.ok(getCity("beijing"));
     assert.equal(CITIES.length, 12);
+  });
+
+  it("uses OpenAQ on BRICS cities", () => {
+    for (const id of ["beijing", "moscow", "pretoria", "abu-dhabi", "jakarta", "brasilia"] as const) {
+      assert.ok(getCity(id)!.stations.sources.includes("openaq"), id);
+    }
   });
 });
 

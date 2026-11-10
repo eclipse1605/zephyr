@@ -518,7 +518,7 @@ resource "google_cloud_scheduler_job" "wind" {
 
 resource "google_cloud_scheduler_job" "jobs_run" {
   name             = "${var.name_prefix}-jobs-run"
-  schedule         = "*/2 * * * *"
+  schedule         = "* * * * *"
   time_zone        = "Asia/Kolkata"
   attempt_deadline = "180s"
 

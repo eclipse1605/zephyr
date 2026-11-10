@@ -55,8 +55,9 @@ type LiveFetch = () => Promise<WindCell[]>;
 
 export async function fetchOpenMeteoWind(): Promise<WindCell[]> {
   const cells: Array<{ lat: number; lng: number }> = [];
-  for (let lat = -60; lat <= 60; lat += 30) {
-    for (let lng = -180; lng < 180; lng += 30) cells.push({ lat, lng });
+  // 20° grid (~126 points) balances flow detail against Open-Meteo request size.
+  for (let lat = -60; lat <= 60; lat += 20) {
+    for (let lng = -180; lng < 180; lng += 20) cells.push({ lat, lng });
   }
   const url = new URL("https://api.open-meteo.com/v1/forecast");
   url.searchParams.set("latitude", cells.map((cell) => cell.lat).join(","));

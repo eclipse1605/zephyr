@@ -16,6 +16,7 @@ import {
   type ZoneView,
 } from "./api";
 import { advisoryNote, briefFallback, briefForLang, groupAdvice, rememberTrack } from "./advice";
+import { AuthPanel } from "./authPanel";
 import { t } from "./i18n";
 import { useLang } from "./lang";
 import { mapStyleUrl, retryLabel } from "./mapStyle";
@@ -618,24 +619,32 @@ function ingestFail(lang: string): string {
   return FEED_FAIL[lang] ?? FEED_FAIL.en;
 }
 
+function isConfigMissingFeed(error: string | null | undefined): boolean {
+  const text = (error ?? "").toLowerCase();
+  return text.includes("not configured") || (text.includes("api_key") && text.includes("missing"));
+}
+
 function failedFeedNames(health: Health | null): string[] {
   const feeds = health?.ingest?.feeds;
   const fromFeeds = feeds
     ? Object.entries(feeds).flatMap(([key, item]) => {
-        if (item?.ok !== false) return [];
+        if (item?.ok !== false || isConfigMissingFeed(item.error)) return [];
         const cut = key.lastIndexOf(":");
         return [cut >= 0 ? key.slice(cut + 1) : key];
       })
     : [];
+  const unique = [...new Set(fromFeeds)];
   const err = health?.ingest?.lastError?.toLowerCase() ?? "";
-  const named = ["openaq", "cpcb", "waqi", "demo"].filter((key) => err.includes(key) && !fromFeeds.includes(key));
-  return [...fromFeeds, ...named];
+  if (isConfigMissingFeed(err)) return unique;
+  const named = ["openaq", "cpcb", "waqi", "demo"].filter((key) => err.includes(key) && !unique.includes(key));
+  return [...unique, ...named];
 }
 
 function ingestBanner(health: Health | null, lang: string): string {
   const names = failedFeedNames(health).map((key) => sourceLabel(lang, key)).join(", ");
   const raw = health?.ingest?.lastError?.trim() ?? "";
-  const detail = !raw || raw === "feedError" ? "" : raw;
+  const detail = !raw || raw === "feedError" || isConfigMissingFeed(raw) ? "" : raw;
+  if (!names && !detail) return "";
   return [ingestFail(lang), names, detail].filter(Boolean).join(": ");
 }
 
@@ -742,23 +751,45 @@ function PageExits({ lang }: { lang: string }) {
   );
 }
 
-function OperatorSignIn({ lang, login }: { lang: string; login: (email: string, operator: boolean) => void }) {
+function OperatorSignIn({
+  lang,
+  login,
+  loginToken,
+  firebaseEnabled,
+  googleSignIn = true,
+  devAuth,
+  signInEmail,
+  signInGoogle,
+}: {
+  lang: string;
+  login: (email: string, operator: boolean) => void;
+  loginToken: (email: string, token: string) => void;
+  firebaseEnabled: boolean;
+  googleSignIn?: boolean;
+  devAuth: boolean;
+  signInEmail: (email: string, password: string) => Promise<{ idToken: string; email: string }>;
+  signInGoogle: () => Promise<{ idToken: string; email: string }>;
+}) {
   return (
-    <form
-      className="card"
-      onSubmit={(event) => {
-        event.preventDefault();
-        const email = String(new FormData(event.currentTarget).get("email") ?? "").trim();
-        if (email) login(email, true);
-      }}
-    >
+    <div className="card stack">
       <p>{t(lang, "signInOperator")}</p>
-      <label>
-        {t(lang, "operatorEmail")}
-        <input type="email" name="email" required autoComplete="email" />
-      </label>
-      <button type="submit" className="primary">{t(lang, "submit")}</button>
-    </form>
+      <AuthPanel
+        lang={lang}
+        firebaseEnabled={firebaseEnabled}
+        googleSignIn={googleSignIn}
+        devAuth={devAuth}
+        showDevOperator
+        onDevLogin={(email, asOperator) => login(email, asOperator)}
+        onFirebaseEmail={async (email, password) => {
+          const session = await signInEmail(email, password);
+          loginToken(session.email, session.idToken);
+        }}
+        onFirebaseGoogle={async () => {
+          const session = await signInGoogle();
+          loginToken(session.email, session.idToken);
+        }}
+      />
+    </div>
   );
 }
 
@@ -1667,7 +1698,33 @@ export function DiaryPage({
   );
 }
 
-export function OperatorPage({ auth, cityId, cities, login }: { auth: Auth | null; cityId: string; cities: City[]; login: (email: string, operator: boolean) => void }) {
+export function OperatorPage({
+  auth,
+  cityId,
+  cities,
+  login,
+  loginToken,
+  confirmedOperator,
+  rolePending,
+  firebaseEnabled,
+  googleSignIn = true,
+  devAuth,
+  signInEmail,
+  signInGoogle,
+}: {
+  auth: Auth | null;
+  cityId: string;
+  cities: City[];
+  login: (email: string, operator: boolean) => void;
+  loginToken: (email: string, token: string) => void;
+  confirmedOperator: boolean;
+  rolePending: boolean;
+  firebaseEnabled: boolean;
+  googleSignIn?: boolean;
+  devAuth: boolean;
+  signInEmail: (email: string, password: string) => Promise<{ idToken: string; email: string }>;
+  signInGoogle: () => Promise<{ idToken: string; email: string }>;
+}) {
   const lang = useLang();
   const [incidents, setIncidents] = useState<OperatorIncident[]>([]);
   const [queueState, setQueueState] = useState<"loading" | "ready" | "error">("loading");
@@ -1681,7 +1738,7 @@ export function OperatorPage({ auth, cityId, cities, login }: { auth: Auth | nul
   const [copilotOpen, setCopilotOpen] = useState(false);
   const [copilotBusy, setCopilotBusy] = useState(false);
   const reload = () => {
-    if (!auth?.operator) return Promise.resolve();
+    if (!confirmedOperator || !auth) return Promise.resolve();
     return api.incidents(auth).then((r) => {
       setIncidents(r.incidents);
       setQueueError(null);
@@ -1693,9 +1750,9 @@ export function OperatorPage({ auth, cityId, cities, login }: { auth: Auth | nul
   };
 
   useEffect(() => {
-    if (!auth?.operator) return;
+    if (!confirmedOperator) return;
     reload().catch(console.error);
-  }, [auth]);
+  }, [auth, confirmedOperator]);
 
   useEffect(() => {
     if (!copilotOpen) return;
@@ -1731,7 +1788,7 @@ export function OperatorPage({ auth, cityId, cities, login }: { auth: Auth | nul
 
   const askCopilot = async () => {
     const text = question.trim();
-    if (!auth?.operator || copilotBusy || !text) return;
+    if (!confirmedOperator || !auth || copilotBusy || !text) return;
     setLastQuestion(text);
     setCopilotBusy(true);
     setAnswer("");
@@ -1748,16 +1805,30 @@ export function OperatorPage({ auth, cityId, cities, login }: { auth: Auth | nul
     }
   };
 
-  if (!auth?.operator) {
+  if (!confirmedOperator) {
     return (
       <div className="stack">
         <PageHead kicker={t(lang, "queue")} title={t(lang, "operator")} />
         <PageExits lang={lang} />
-        <OperatorSignIn lang={lang} login={login} />
+        {rolePending ? <p className="muted">{t(lang, "loading")}</p> : null}
+        {auth && !rolePending ? <p className="status">{t(lang, "operatorNotAllowed")}</p> : null}
+        {!auth && !rolePending ? (
+          <OperatorSignIn
+            lang={lang}
+            login={login}
+            loginToken={loginToken}
+            firebaseEnabled={firebaseEnabled}
+            googleSignIn={googleSignIn}
+            devAuth={devAuth}
+            signInEmail={signInEmail}
+            signInGoogle={signInGoogle}
+          />
+        ) : null}
       </div>
     );
   }
 
+  const session = auth!;
   const cityQueue = incidents.filter((i) => i.cityId === cityId);
 
   const confirmAction = (id: string, action: string, message: string) => {
@@ -1768,7 +1839,7 @@ export function OperatorPage({ auth, cityId, cities, login }: { auth: Auth | nul
     const next = pending;
     setPending(null);
     setActionError(null);
-    void api.incidentAction(auth, next.id, next.action).then(reload).catch(() => setActionError(missLabel(lang)));
+    void api.incidentAction(session, next.id, next.action).then(reload).catch(() => setActionError(missLabel(lang)));
   };
 
   return (
@@ -1945,7 +2016,33 @@ export function OperatorPage({ auth, cityId, cities, login }: { auth: Auth | nul
   );
 }
 
-export function PipelinePage({ auth, cityId, cities, login }: { auth: Auth | null; cityId: string; cities: City[]; login: (email: string, operator: boolean) => void }) {
+export function PipelinePage({
+  auth,
+  cityId,
+  cities,
+  login,
+  loginToken,
+  confirmedOperator,
+  rolePending,
+  firebaseEnabled,
+  googleSignIn = true,
+  devAuth,
+  signInEmail,
+  signInGoogle,
+}: {
+  auth: Auth | null;
+  cityId: string;
+  cities: City[];
+  login: (email: string, operator: boolean) => void;
+  loginToken: (email: string, token: string) => void;
+  confirmedOperator: boolean;
+  rolePending: boolean;
+  firebaseEnabled: boolean;
+  googleSignIn?: boolean;
+  devAuth: boolean;
+  signInEmail: (email: string, password: string) => Promise<{ idToken: string; email: string }>;
+  signInGoogle: () => Promise<{ idToken: string; email: string }>;
+}) {
   const lang = useLang();
   const [items, setItems] = useState<Array<Record<string, unknown>>>([]);
   const [health, setHealth] = useState<Health | null>(null);
@@ -1960,9 +2057,10 @@ export function PipelinePage({ auth, cityId, cities, login }: { auth: Auth | nul
   const [pipeError, setPipeError] = useState<string | null>(null);
   const [replayError, setReplayError] = useState<string | null>(null);
   void cityId;
+  void cities;
 
   const reload = async () => {
-    if (!auth?.operator) return;
+    if (!confirmedOperator || !auth) return;
     const [dlq, nextHealth] = await Promise.all([api.dlq(auth), api.health()]);
     setItems(dlq.items);
     setHealth(nextHealth);
@@ -1970,24 +2068,37 @@ export function PipelinePage({ auth, cityId, cities, login }: { auth: Auth | nul
   };
 
   useEffect(() => {
-    if (!auth?.operator) return;
+    if (!confirmedOperator) return;
     reload().catch((err: Error) => {
       setPipeError(err.message);
       setPipeState("error");
     });
-  }, [auth]);
+  }, [auth, confirmedOperator]);
 
-  if (!auth?.operator) {
+  if (!confirmedOperator) {
     return (
       <div className="stack">
         <PageHead kicker={t(lang, "live")} title={t(lang, "pipeline")} />
         <PageExits lang={lang} />
-        {auth && !auth.operator ? <p className="status">{t(lang, "operatorNotAllowed")}</p> : null}
-        <OperatorSignIn lang={lang} login={login} />
+        {rolePending ? <p className="muted">{t(lang, "loading")}</p> : null}
+        {auth && !rolePending ? <p className="status">{t(lang, "operatorNotAllowed")}</p> : null}
+        {!auth && !rolePending ? (
+          <OperatorSignIn
+            lang={lang}
+            login={login}
+            loginToken={loginToken}
+            firebaseEnabled={firebaseEnabled}
+            googleSignIn={googleSignIn}
+            devAuth={devAuth}
+            signInEmail={signInEmail}
+            signInGoogle={signInGoogle}
+          />
+        ) : null}
       </div>
     );
   }
 
+  const session = auth!;
   const mode = health?.dataMode === "live" || health?.dataMode === "demo" ? health.dataMode : null;
 
   const setDataMode = async (next: "demo" | "live") => {
@@ -1998,7 +2109,7 @@ export function PipelinePage({ auth, cityId, cities, login }: { auth: Auth | nul
     setRefreshError(null);
     setModeBusy(true);
     try {
-      await api.setMode(auth, next);
+      await api.setMode(session, next);
     } catch (err) {
       setModeError("failed");
       setModeBusy(false);
@@ -2024,7 +2135,7 @@ export function PipelinePage({ auth, cityId, cities, login }: { auth: Auth | nul
     setRefreshError(null);
     setTickBusy(true);
     try {
-      await api.tick(auth);
+      await api.tick(session);
     } catch (err) {
       setTickError("failed");
       setTickBusy(false);
@@ -2174,7 +2285,7 @@ export function PipelinePage({ auth, cityId, cities, login }: { auth: Auth | nul
                   <td>
                     <button type="button" onClick={() => {
                       setReplayError(null);
-                      api.replay(auth, String(i.messageId)).then(reload).catch((err: Error) => setReplayError(err.message || "failed"));
+                      api.replay(session, String(i.messageId)).then(reload).catch((err: Error) => setReplayError(err.message || "failed"));
                     }}>
                       {t(lang, "replay")}
                     </button>

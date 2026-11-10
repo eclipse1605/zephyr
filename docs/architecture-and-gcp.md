@@ -21,7 +21,7 @@ The product covers twelve cities:
 | India (India NAAQS AQI) | New Delhi, Mumbai, Kolkata, Chennai, Bengaluru, Hyderabad |
 | Other capitals (US AQI) | Beijing, Moscow, Pretoria, Abu Dhabi, Jakarta, Brasília   |
 
-India cities merge OpenAQ, WAQI, and CPCB when keys exist. The other cities use WAQI only.
+India cities merge OpenAQ, WAQI, and CPCB when keys exist. BRICS cities use OpenAQ plus WAQI.
 
 Two data modes exist:
 
@@ -49,11 +49,13 @@ The UI is a Vite + React single-page app. MapLibre draws maps from OpenFreeMap. 
 | `/zones/:h3` | Nearest station, zone brief, group advisory, 24 h forecast, upwind sources, subscribe, read-aloud                 |
 | `/diary`     | Home pin and hours in each AQI band for seven days. Sign-in is required                                           |
 
-Local sign-in is a Bearer token. Resident tokens use `demo:<email>`. Operator tokens use `operator:<email>`. The API accepts those tokens only when `ZEPHYR_DEV_AUTH=1`. Without that flag, the API checks a Google ID token at `oauth2.googleapis.com/tokeninfo`. An operator email must appear in `OPERATOR_EMAILS`.
+Auth roles are `resident` and `operator`. Permissions are derived from role (`me.*`, `incidents.*`, `copilot`, `dlq.*`, `system.*`, `api_keys.create`). Operator status comes from a Firebase custom claim, a stored user role, or `OPERATOR_EMAILS`.
+
+Local sign-in when `ZEPHYR_DEV_AUTH=1`: resident tokens use `demo:<email>` (never elevated); operator tokens use `operator:<email>` and must be listed in `OPERATOR_EMAILS`. With Firebase client config, the web app signs in with email/password or Google and sends the Firebase ID token. The API verifies Firebase ID tokens against the project audience (Auth emulator lookup when `FIREBASE_AUTH_EMULATOR_HOST` is set). A last-resort Google `tokeninfo` check remains only when Firebase verification is unavailable; role still requires `OPERATOR_EMAILS` or a stored operator role. `GET /auth/whoami` returns `{ email, role, operator, permissions }`.
 
 ### Operator UI
 
-Visible only after the API marks the session as operator.
+Visible only after `/auth/whoami` confirms `role === "operator"`.
 
 | Route       | Behavior                                                                                          |
 | ----------- | ------------------------------------------------------------------------------------------------- |
@@ -258,4 +260,4 @@ cp .env.example .env
 bun run dev
 ```
 
-Open `http://127.0.0.1:5173`. Worker `:8081`, API `:8080`.
+Open `http://localhost:5173` (not `127.0.0.1` — Firebase Google sign-in requires an authorized domain). Worker `:8081`, API `:8080`.

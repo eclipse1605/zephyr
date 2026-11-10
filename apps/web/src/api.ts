@@ -1,6 +1,15 @@
 const API = "/api/v1";
 
-export type Auth = { token: string; email: string; operator: boolean };
+export type Role = "resident" | "operator";
+
+export type Auth = {
+  token: string;
+  email: string;
+  operator: boolean;
+  role?: Role;
+  permissions?: string[];
+  source?: "dev" | "firebase";
+};
 
 export type City = {
   id: string;
@@ -23,6 +32,13 @@ export type Health = {
   devAuth?: boolean;
   authEmulator?: string | null;
   firebaseProjectId?: string | null;
+  googleSignIn?: boolean;
+  firebaseClient?: {
+    apiKey: string;
+    authDomain: string;
+    projectId: string;
+    appId?: string;
+  } | null;
 };
 
 export type CitySummary = {
@@ -206,31 +222,6 @@ async function upload(path: string, field: string, file: File, token: string) {
   return res.json();
 }
 
-export async function emulatorPassword(host: string, email: string, password: string): Promise<{ idToken: string; email: string }> {
-  const key = "demo-key";
-  const body = JSON.stringify({ email, password, returnSecureToken: true });
-  const signIn = await fetch(`http://${host}/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${key}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body,
-  });
-  const payload = signIn.ok
-    ? await signIn.json() as { idToken?: string; email?: string }
-    : null;
-  const created = payload?.idToken
-    ? payload
-    : await fetch(`http://${host}/identitytoolkit.googleapis.com/v1/accounts:signUp?key=${key}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body,
-    }).then(async (response) => {
-      if (!response.ok) throw new Error("sign_in_failed");
-      return response.json() as Promise<{ idToken?: string; email?: string }>;
-    });
-  if (!created.idToken) throw new Error("sign_in_failed");
-  return { idToken: created.idToken, email: created.email ?? email };
-}
-
 export const api = {
   health: () => req<Health>("/health"),
   cities: () => req<{ cities: City[] }>("/cities"),
@@ -275,7 +266,8 @@ export const api = {
     req(`/operator/incidents/${id}/${action}`, { method: "POST", body: "{}" }, auth),
   dlq: (auth: Auth) => req<{ items: Array<Record<string, unknown>> }>("/operator/dlq", {}, auth),
   replay: (auth: Auth, id: string) => req(`/operator/dlq/${id}/replay`, { method: "POST", body: "{}" }, auth),
-  whoami: (auth: Auth) => req<{ email: string; operator: boolean }>("/auth/whoami", {}, auth),
+  whoami: (auth: Auth) =>
+    req<{ email: string; operator: boolean; role: Role; permissions: string[] }>("/auth/whoami", {}, auth),
   setMode: (auth: Auth, dataMode: "live" | "demo") =>
     req("/system/data-mode", { method: "POST", body: JSON.stringify({ dataMode }) }, auth),
   tick: (auth: Auth) => req<{ ok?: boolean; via?: string; mode?: string; error?: string }>("/system/tick", { method: "POST", body: "{}" }, auth),

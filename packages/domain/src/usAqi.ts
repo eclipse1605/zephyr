@@ -52,7 +52,7 @@ export type UsAqi = {
   estimate: true;
 };
 
-/** US EPA AQI from PM concentrations (BRICS stations via WAQI). */
+/** US EPA AQI from PM concentrations (BRICS stations via OpenAQ / WAQI). */
 export function usAqiFromReadings(readings: PollutantReadings): UsAqi | null {
   const candidates: { name: string; value: number }[] = [];
   const pm25 = concentrationToUsAqi(readings.pm25, PM25_BREAKPOINTS);

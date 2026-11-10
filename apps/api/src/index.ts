@@ -23,6 +23,7 @@ import {
   exposureGaps,
   verifyTwilioSignature,
   h3ToLatLng,
+  collapseNearbyStations,
 } from "@zephyr/domain";
 import {
   hashIp,
@@ -39,23 +40,28 @@ import {
   openStore,
   forecastTrainingStatus,
   openAqConfigured,
+  openAqApiKeys,
   resolveFromRoot,
   resolveListenPort,
   takeReportId,
   sniffImage,
   stripImageLocation,
   sniffAudio,
-  devSession,
-  lookupEmulatorAccount,
-  sessionFromAccount,
+  authenticateBearer,
+  whoamiPayload,
+  userHasPermission,
+  probeGoogleSignIn,
   fetchLiveWaqi,
   openAqBudgetStatus,
   internalAuthHeaders,
   cachedModelPoint,
   cachedModelTile,
+  composeModelField,
   readWindGrid,
   enqueueIngestJobs,
   replayIngestJob,
+  type Permission,
+  type SessionUser,
 } from "@zephyr/server";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -77,54 +83,11 @@ function param(value: string | string[] | undefined): string {
   return value ?? "";
 }
 
-function operatorEmails(): Set<string> {
-  return new Set(
-    (process.env.OPERATOR_EMAILS ?? "")
-      .split(",")
-      .map((e) => e.trim().toLowerCase())
-      .filter(Boolean),
-  );
+async function authUser(req: express.Request): Promise<SessionUser | null> {
+  return authenticateBearer(req.header("authorization") ?? undefined, store);
 }
 
-async function authUser(req: express.Request): Promise<{ uid: string; email: string; operator: boolean } | null> {
-  const header = req.header("authorization") ?? "";
-  const m = header.match(/^Bearer\s+(.+)$/i);
-  if (!m) return null;
-  const token = m[1]!;
-  const dev = devSession(token, process.env.ZEPHYR_DEV_AUTH === "1", operatorEmails());
-  if (dev) return { ...dev, uid: sha256(dev.email).slice(0, 16) };
-  const emulator = process.env.FIREBASE_AUTH_EMULATOR_HOST?.trim();
-  if (emulator) {
-    const account = await lookupEmulatorAccount(emulator, token, process.env.FIREBASE_API_KEY?.trim() || "demo-key");
-    if (!account) return null;
-    const db = await store.read();
-    const session = sessionFromAccount(account, db.users[account.localId]?.role);
-    if (!session) return null;
-    const role = session.operator ? "operator" : "resident";
-    const known = db.users[session.uid];
-    if (!known || known.email !== session.email || known.role !== role) {
-      await store.update((next) => {
-        const previous = next.users[session.uid];
-        const kept = previous?.role === "operator" || session.operator ? "operator" : "resident";
-        next.users[session.uid] = { uid: session.uid, email: session.email, role: kept };
-      });
-      session.operator = role === "operator" || db.users[session.uid]?.role === "operator";
-    }
-    return session;
-  }
-  try {
-    const res = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(token)}`);
-    if (!res.ok) return null;
-    const info = (await res.json()) as { sub?: string; email?: string };
-    if (!info.email || !info.sub) return null;
-    const email = info.email.toLowerCase();
-    return { uid: info.sub, email, operator: operatorEmails().has(email) };
-  } catch {
-    return null;
-  }
-}
-
-async function requireUser(req: express.Request, res: express.Response): Promise<{ uid: string; email: string; operator: boolean } | null> {
+async function requireUser(req: express.Request, res: express.Response): Promise<SessionUser | null> {
   const u = await authUser(req);
   if (!u) {
     res.status(401).json({ error: "unauthorized" });
@@ -133,11 +96,15 @@ async function requireUser(req: express.Request, res: express.Response): Promise
   return u;
 }
 
-async function requireOperator(req: express.Request, res: express.Response) {
+async function requirePermission(
+  req: express.Request,
+  res: express.Response,
+  permission: Permission,
+): Promise<SessionUser | null> {
   const u = await requireUser(req, res);
   if (!u) return null;
-  if (!u.operator && !operatorEmails().has(u.email)) {
-    res.status(403).json({ error: "operator_required" });
+  if (!userHasPermission(u, permission)) {
+    res.status(403).json({ error: "forbidden", permission });
     return null;
   }
   return u;
@@ -182,7 +149,7 @@ const v1 = express.Router();
 v1.get("/auth/whoami", async (req, res) => {
   const u = await authUser(req);
   if (!u) return res.status(401).json({ error: "unauthorized" });
-  res.json({ email: u.email, operator: u.operator });
+  res.json(whoamiPayload(u));
 });
 
 v1.get("/model/tiles/:layer/:z/:x/:y", async (req, res) => {
@@ -193,12 +160,49 @@ v1.get("/model/tiles/:layer/:z/:x/:y", async (req, res) => {
   const y = Number(param(req.params.y));
   try {
     const tile = await cachedModelTile({ layer, z, x, y, cacheDir: path.join(DATA, "model-tiles") });
-    res.set("Cache-Control", "public, max-age=3600");
-    res.set("X-Zephyr-Cache", tile.cached ? "hit" : "miss");
+    // Blank tiles must not stick in the browser — they punch holes in the field.
+    res.set(
+      "Cache-Control",
+      tile.blank ? "public, max-age=5" : tile.stale ? "public, max-age=60" : "public, max-age=3600",
+    );
+    res.set("X-Zephyr-Cache", tile.stale ? "stale" : tile.cached ? "hit" : "miss");
+    if (tile.blank) res.set("X-Zephyr-Blank", "1");
     res.type("png").send(tile.png);
   } catch (err) {
     const message = err instanceof Error ? err.message : "tile";
     res.status(message === "zoom" || message === "tile" ? 404 : 502).json({ error: message });
+  }
+});
+
+/** Seam-free stitched field for globe / continent zooms (image source). */
+v1.get("/model/field/:layer", async (req, res) => {
+  const layer = param(req.params.layer);
+  if (layer !== "aqi" && layer !== "pm25") return res.status(400).json({ error: "bad_layer" });
+  // Default: full-world z2 mosaic so every continent gets the globe field.
+  const z = Number(req.query.z ?? 2);
+  const x0 = Number(req.query.x0 ?? 0);
+  const x1 = Number(req.query.x1 ?? 3);
+  const y0 = Number(req.query.y0 ?? 0);
+  const y1 = Number(req.query.y1 ?? 3);
+  try {
+    const field = await composeModelField({
+      layer,
+      z,
+      x0,
+      x1,
+      y0,
+      y1,
+      cacheDir: path.join(DATA, "model-tiles"),
+    });
+    res.set("Cache-Control", "public, max-age=300");
+    res.set("X-Zephyr-Field-West", String(field.west));
+    res.set("X-Zephyr-Field-East", String(field.east));
+    res.set("X-Zephyr-Field-North", String(field.north));
+    res.set("X-Zephyr-Field-South", String(field.south));
+    res.type("png").send(field.png);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "field";
+    res.status(message === "zoom" || message === "field" ? 400 : 502).json({ error: message });
   }
 });
 
@@ -227,6 +231,30 @@ v1.get("/model/point", async (req, res) => {
 
 v1.get("/health", async (_req, res) => {
   const db = await store.read();
+  const firebaseClient = (() => {
+    const apiKey =
+      process.env.VITE_FIREBASE_API_KEY?.trim() ||
+      process.env.NEXT_PUBLIC_FIREBASE_API_KEY?.trim() ||
+      process.env.FIREBASE_API_KEY?.trim() ||
+      "";
+    const projectId =
+      process.env.VITE_FIREBASE_PROJECT_ID?.trim() ||
+      process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID?.trim() ||
+      process.env.FIREBASE_PROJECT_ID?.trim() ||
+      "";
+    const authDomain =
+      process.env.VITE_FIREBASE_AUTH_DOMAIN?.trim() ||
+      process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN?.trim() ||
+      (projectId ? `${projectId}.firebaseapp.com` : "");
+    if (!apiKey || !projectId) return null;
+    return {
+      apiKey,
+      authDomain,
+      projectId,
+      appId: process.env.VITE_FIREBASE_APP_ID?.trim() || process.env.NEXT_PUBLIC_FIREBASE_APP_ID?.trim() || "",
+    };
+  })();
+  const googleSignIn = firebaseClient ? await probeGoogleSignIn(firebaseClient.apiKey) : false;
   res.json({
     ok: true,
     service: "api",
@@ -241,11 +269,14 @@ v1.get("/health", async (_req, res) => {
       places: Boolean(process.env.GOOGLE_PLACES_API_KEY?.trim()),
       airQuality: Boolean(process.env.GOOGLE_AIR_QUALITY_API_KEY?.trim()),
       firebase: Boolean(process.env.FIREBASE_SERVICE_ACCOUNT_KEY?.trim()),
+      googleSignIn,
     },
     devAuth: process.env.ZEPHYR_DEV_AUTH === "1",
-    openAq: openAqBudgetStatus(),
+    openAq: openAqBudgetStatus(Date.now(), openAqApiKeys().length),
     authEmulator: process.env.AUTH_EMULATOR_PUBLIC_HOST?.trim() || process.env.FIREBASE_AUTH_EMULATOR_HOST?.trim() || null,
-    firebaseProjectId: process.env.FIREBASE_PROJECT_ID?.trim() || null,
+    firebaseProjectId: process.env.FIREBASE_PROJECT_ID?.trim() || process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID?.trim() || process.env.VITE_FIREBASE_PROJECT_ID?.trim() || null,
+    googleSignIn,
+    firebaseClient,
     ingest: db.ingest,
     forecastTraining: forecastTrainingStatus(
       Math.max(0, ...Object.values(
@@ -290,7 +321,7 @@ v1.get("/cities/:cityId/stations", async (req, res) => {
     const city = getCity(param(req.params.cityId));
     if (city?.stations.sources.includes("waqi")) liveWaqi = await fetchLiveWaqi(city) as typeof stations;
   }
-  res.json({ stations: [...stations, ...liveWaqi], surfaces });
+  res.json({ stations: collapseNearbyStations([...stations, ...liveWaqi]), surfaces });
 });
 
 v1.get("/stations", async (req, res) => {
@@ -311,7 +342,7 @@ v1.get("/stations", async (req, res) => {
     return s.lng >= minLng && s.lng <= maxLng && s.lat >= minLat && s.lat <= maxLat;
   });
   const surfaces = Object.values(db.surfaceCells).filter((cell) => cell.basis === "reports");
-  res.json({ stations, surfaces });
+  res.json({ stations: collapseNearbyStations(stations), surfaces });
 });
 v1.get("/cities/:cityId/wards", async (req, res) => {
   const db = await store.read();
@@ -590,13 +621,13 @@ v1.post("/reports/:id/closure", async (req, res) => {
 });
 
 v1.get("/me", async (req, res) => {
-  const u = await requireUser(req, res);
+  const u = await requirePermission(req, res, "me.read");
   if (!u) return;
-  res.json(u);
+  res.json(whoamiPayload(u));
 });
 
 v1.get("/me/diary", async (req, res) => {
-  const u = await requireUser(req, res);
+  const u = await requirePermission(req, res, "me.read");
   if (!u) return;
   const db = await store.read();
   const diary = db.diaries[u.uid] ?? null;
@@ -611,7 +642,7 @@ v1.get("/me/diary", async (req, res) => {
 });
 
 v1.put("/me/diary", async (req, res) => {
-  const u = await requireUser(req, res);
+  const u = await requirePermission(req, res, "me.write");
   if (!u) return;
   const { cityId, lat, lng } = req.body ?? {};
   const city = getCity(cityId);
@@ -631,7 +662,7 @@ v1.put("/me/diary", async (req, res) => {
 });
 
 v1.get("/me/subscriptions", async (req, res) => {
-  const u = await requireUser(req, res);
+  const u = await requirePermission(req, res, "me.read");
   if (!u) return;
   const db = await store.read();
   res.json({
@@ -641,7 +672,7 @@ v1.get("/me/subscriptions", async (req, res) => {
 });
 
 v1.post("/me/subscriptions", async (req, res) => {
-  const u = await requireUser(req, res);
+  const u = await requirePermission(req, res, "me.write");
   if (!u) return;
   const { h3, cityId, channels } = req.body ?? {};
   if (!h3 || !cityId) return res.status(400).json({ error: "bad_request" });
@@ -660,7 +691,7 @@ v1.post("/me/subscriptions", async (req, res) => {
 });
 
 v1.delete("/me/subscriptions/:h3", async (req, res) => {
-  const u = await requireUser(req, res);
+  const u = await requirePermission(req, res, "me.write");
   if (!u) return;
   await store.update((db) => {
     delete db.subscriptions[`${u.uid}_${param(req.params.h3)}`];
@@ -669,7 +700,7 @@ v1.delete("/me/subscriptions/:h3", async (req, res) => {
 });
 
 v1.post("/api-keys", async (req, res) => {
-  const u = await requireOperator(req, res);
+  const u = await requirePermission(req, res, "api_keys.create");
   if (!u) return;
   const raw = `zph_${newToken().raw}`;
   const hash = sha256(raw);
@@ -685,7 +716,7 @@ v1.post("/api-keys", async (req, res) => {
 });
 
 v1.get("/operator/incidents", async (req, res) => {
-  if (!await requireOperator(req, res)) return;
+  if (!await requirePermission(req, res, "incidents.read")) return;
   const db = await store.read();
   const items = Object.values(db.incidents)
     .filter((i) => ["open", "dispatched", "disputed"].includes(i.status))
@@ -701,7 +732,7 @@ v1.get("/operator/incidents", async (req, res) => {
 });
 
 v1.post("/operator/incidents/:id/:action", async (req, res) => {
-  const u = await requireOperator(req, res);
+  const u = await requirePermission(req, res, "incidents.act");
   if (!u) return;
   const action = param(req.params.action) as "dispatch" | "resolve" | "false-positive";
   const mapped = action === "false-positive" ? "false_positive" : action;
@@ -713,7 +744,7 @@ v1.post("/operator/incidents/:id/:action", async (req, res) => {
 });
 
 v1.post("/operator/copilot", async (req, res) => {
-  if (!await requireOperator(req, res)) return;
+  if (!await requirePermission(req, res, "copilot")) return;
   const result = await runCopilot(String(req.body?.question ?? ""), {
     incidents: async (args) => {
       const db = await store.read();
@@ -777,13 +808,13 @@ v1.post("/reports/:id/voice", upload.single("voice"), async (req, res) => {
 });
 
 v1.get("/operator/dlq", async (req, res) => {
-  if (!await requireOperator(req, res)) return;
+  if (!await requirePermission(req, res, "dlq.read")) return;
   const db = await store.read();
   res.json({ items: Object.values(db.dlqItems) });
 });
 
 v1.post("/operator/dlq/:id/replay", async (req, res) => {
-  if (!await requireOperator(req, res)) return;
+  if (!await requirePermission(req, res, "dlq.replay")) return;
   const db = await store.read();
   const item = db.dlqItems[param(req.params.id)];
   if (!item) return res.status(404).json({ error: "not_found" });
@@ -806,7 +837,7 @@ v1.post("/operator/dlq/:id/replay", async (req, res) => {
 });
 
 v1.post("/system/data-mode", async (req, res) => {
-  if (!await requireOperator(req, res)) return;
+  if (!await requirePermission(req, res, "system.mode")) return;
   const mode = req.body?.dataMode;
   if (mode !== "live" && mode !== "demo") return res.status(400).json({ error: "bad_mode" });
   await store.update((db) => {
@@ -816,7 +847,7 @@ v1.post("/system/data-mode", async (req, res) => {
 });
 
 v1.post("/system/tick", async (req, res) => {
-  if (!await requireOperator(req, res)) return;
+  if (!await requirePermission(req, res, "system.tick")) return;
   try {
     const headers = await internalAuthHeaders(WORKER_URL);
     const tick = await fetch(`${WORKER_URL}/internal/tick`, { method: "POST", headers });

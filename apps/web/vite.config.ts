@@ -26,11 +26,27 @@ const repoEnv = readRepoEnv(repoRoot);
 const apiPort = process.env.API_PORT || repoEnv.API_PORT || "8080";
 const apiProxy = process.env.API_PROXY || repoEnv.API_PROXY || `http://127.0.0.1:${apiPort}`;
 
+function firebaseEnv(key: string, fallback = ""): string {
+  return process.env[`VITE_${key}`] || repoEnv[`VITE_${key}`] || process.env[`NEXT_PUBLIC_${key}`] || repoEnv[`NEXT_PUBLIC_${key}`] || repoEnv[key] || fallback;
+}
+
 export default defineConfig({
   plugins: [react()],
+  define: {
+    "import.meta.env.VITE_FIREBASE_API_KEY": JSON.stringify(firebaseEnv("FIREBASE_API_KEY", repoEnv.FIREBASE_API_KEY || "")),
+    "import.meta.env.VITE_FIREBASE_AUTH_DOMAIN": JSON.stringify(firebaseEnv("FIREBASE_AUTH_DOMAIN")),
+    "import.meta.env.VITE_FIREBASE_PROJECT_ID": JSON.stringify(firebaseEnv("FIREBASE_PROJECT_ID", repoEnv.FIREBASE_PROJECT_ID || "")),
+    "import.meta.env.VITE_FIREBASE_APP_ID": JSON.stringify(firebaseEnv("FIREBASE_APP_ID")),
+  },
   server: {
-    host: "127.0.0.1",
+    // localhost (not 127.0.0.1): Firebase Authorized domains include localhost by default;
+    // Google popup sign-in fails on 127.0.0.1 with "The requested action is invalid."
+    host: "localhost",
     port: 5173,
+    // Keep the Google/Firebase auth popup able to talk back to this page.
+    headers: {
+      "Cross-Origin-Opener-Policy": "same-origin-allow-popups",
+    },
     proxy: {
       "/api": {
         target: apiProxy,

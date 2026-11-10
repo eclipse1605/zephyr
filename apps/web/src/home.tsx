@@ -132,29 +132,74 @@ function missLabel(lang: string): string {
 
 const FEED_KEYS = ["openaq", "cpcb", "waqi", "demo"];
 
+function isConfigMissing(error: string | null | undefined): boolean {
+  const text = (error ?? "").toLowerCase();
+  return text.includes("not configured") || (text.includes("api_key") && text.includes("missing"));
+}
+
 function failedSources(health: Health | null): string[] {
   const feeds = health?.ingest?.feeds;
   const fromFeeds = feeds
     ? Object.entries(feeds).flatMap(([key, item]) => {
-        if (item?.ok !== false) return [];
+        if (item?.ok !== false || isConfigMissing(item.error)) return [];
         const cut = key.lastIndexOf(":");
         return [cut >= 0 ? key.slice(cut + 1) : key];
       })
     : [];
-  if (fromFeeds.length) return fromFeeds;
+  const unique = [...new Set(fromFeeds)];
+  if (unique.length) return unique;
   const err = health?.ingest?.lastError?.toLowerCase() ?? "";
+  if (isConfigMissing(err)) return [];
   return FEED_KEYS.filter((key) => err.includes(key));
 }
 
+/** Hard feed failures only — missing optional API keys are not treated as stale. */
 function ingestError(health: Health | null): string | null {
+  const feeds = health?.ingest?.feeds;
+  if (feeds) {
+    const failed = Object.entries(feeds).filter(([, feed]) => feed?.ok === false && !isConfigMissing(feed.error));
+    if (failed.length) {
+      const unique = [...new Set(failed.map(([, feed]) => feed.error?.trim() || "feedError").filter(Boolean))];
+      return unique.join("; ");
+    }
+    // Only config-missing failures remain — not an upstream outage.
+    if (Object.values(feeds).some((feed) => feed?.ok === false)) return null;
+  }
   const err = health?.ingest?.lastError;
-  if (typeof err === "string" && err.trim()) return err.trim();
+  if (typeof err === "string" && err.trim() && !isConfigMissing(err)) return err.trim();
+  return null;
+}
+
+function optionalFeedNote(health: Health | null, lang: string): string | null {
   const feeds = health?.ingest?.feeds;
   if (!feeds) return null;
-  const failed = Object.entries(feeds).filter(([, feed]) => feed?.ok === false);
-  if (!failed.length) return null;
-  return failed.map(([key, feed]) => feed.error?.trim() || key).join("; ");
+  const skipped = [...new Set(
+    Object.entries(feeds)
+      .filter(([, feed]) => feed?.ok === false && isConfigMissing(feed.error))
+      .map(([key]) => {
+        const cut = key.lastIndexOf(":");
+        return cut >= 0 ? key.slice(cut + 1) : key;
+      }),
+  )];
+  if (!skipped.length) return null;
+  const names = skipped.map((name) => sourceLabel(lang, name)).join(", ");
+  return OPTIONAL_FEED[lang]?.replace("{names}", names) ?? OPTIONAL_FEED.en.replace("{names}", names);
 }
+
+const OPTIONAL_FEED: Record<string, string> = {
+  en: "{names} feed is not configured.",
+  hi: "{names} फ़ीड कॉन्फ़िगर नहीं है।",
+  mr: "{names} फीड कॉन्फिगर नाही.",
+  bn: "{names} ফিড কনফিগার করা নেই।",
+  ta: "{names} ஊட்டம் அமைக்கப்படவில்லை.",
+  kn: "{names} ಫೀಡ್ ಸಂರಚಿಸಿಲ್ಲ.",
+  te: "{names} ఫీడ్ కాన్ఫిగర్ కాలేదు.",
+  zh: "未配置 {names} 数据源。",
+  ru: "Канал {names} не настроен.",
+  ar: "تغذية {names} غير مُعدّة.",
+  id: "Umpan {names} belum dikonfigurasi.",
+  pt: "A fonte {names} não está configurada.",
+};
 
 function sameWardNames(
   top: Array<{ name: string }>,
@@ -241,7 +286,9 @@ export function Home({ cityId, cityName }: { cityId: string; cityName: string })
 
   const current = shownCity === cityId && summary?.cityId === cityId ? summary : null;
   const feed = ingestError(health);
-  const stale = !healthReady || Boolean(feed) || healthDown || readingIsOld(current?.computedAt);
+  const optionalNote = optionalFeedNote(health, lang);
+  // Wait for health before treating the reading as stale (avoids a false "unconfirmed" flash).
+  const stale = healthReady && (Boolean(feed) || healthDown || readingIsOld(current?.computedAt));
   const mode = current?.dataMode === "demo" ? "demo" : "live";
 
   if (error || !current) {
@@ -292,7 +339,22 @@ export function Home({ cityId, cityName }: { cityId: string; cityName: string })
             </div>
           </div>
           <div className="row">
-            {stale ? <span className="badge bad">{[healthDown ? healthDownNote(lang) : null, feed ? [ingestNote(lang), failedSources(health).map((name) => sourceLabel(lang, name)).join(", "), feed === "feedError" ? t(lang, "feedError") : feed].filter(Boolean).join(" ") : null, readingIsOld(current.computedAt) ? oldNote(lang) : null].filter(Boolean).join(" ") || unconfirmedNote(lang)}</span> : <span className={`badge ${mode}`}>{t(lang, mode)}</span>}
+            {stale ? (
+              <span className="badge bad">
+                {[
+                  healthDown ? healthDownNote(lang) : null,
+                  feed
+                    ? [ingestNote(lang), failedSources(health).map((name) => sourceLabel(lang, name)).join(", ")].filter(Boolean).join(" ")
+                    : null,
+                  readingIsOld(current.computedAt) ? oldNote(lang) : null,
+                ]
+                  .filter(Boolean)
+                  .join(" ") || unconfirmedNote(lang)}
+              </span>
+            ) : (
+              <span className={`badge ${mode}`}>{t(lang, mode)}</span>
+            )}
+            {optionalNote && !feed ? <span className="muted">{optionalNote}</span> : null}
             <span className="muted">
               {t(lang, "lastIngest")}: {formatWhen(current.computedAt, lang)}
             </span>

@@ -13,7 +13,7 @@ import {
   type StationReading,
   type StationSource,
 } from "@zephyr/domain";
-import { noteOpenAq429, openAqRequestKey, takeOpenAqSlot } from "./openaqBudget.js";
+import { noteOpenAq429, takeOpenAqKeyOrWait } from "./openaqBudget.js";
 export { openAqBudgetStatus } from "./openaqBudget.js";
 
 export type FeedStatus = { source: StationSource; ok: boolean; error: string | null; count: number };
@@ -22,6 +22,10 @@ export async function fetchCityStations(city: CityConfig): Promise<{ readings: S
   const readings: StationReading[] = [];
   const feeds: FeedStatus[] = [];
   for (const source of city.stations.sources) {
+    if (source === "cpcb" && !process.env.CPCB_API_KEY?.trim()) {
+      // Optional India board feed — skip quietly when the key is absent.
+      continue;
+    }
     try {
       const batch =
         source === "openaq"
@@ -54,17 +58,28 @@ type OpenAqLocationRow = {
 };
 
 function openAqLocationLimit(): number {
-  const n = Number(process.env.OPENAQ_LOCATION_LIMIT ?? 4);
-  return Number.isFinite(n) ? Math.min(4, Math.max(1, Math.floor(n))) : 4;
+  const keys = Math.max(1, openAqApiKeys().length);
+  // Scale with the key pool so multiplexed quota fetches denser city coverage.
+  const fallback = Math.min(40, Math.max(8, keys * 3));
+  const n = Number(process.env.OPENAQ_LOCATION_LIMIT ?? fallback);
+  return Number.isFinite(n) ? Math.min(100, Math.max(1, Math.floor(n))) : fallback;
 }
 
 function openAqConcurrency(): number {
-  const n = Number(process.env.OPENAQ_CONCURRENCY ?? 8);
-  return Number.isFinite(n) ? Math.min(16, Math.max(1, Math.floor(n))) : 8;
+  const keys = Math.max(1, openAqApiKeys().length);
+  const fallback = Math.min(32, Math.max(8, keys * 2));
+  const n = Number(process.env.OPENAQ_CONCURRENCY ?? fallback);
+  return Number.isFinite(n) ? Math.min(48, Math.max(1, Math.floor(n))) : fallback;
 }
 
 function normalizeOpenAqKey(raw: string): string {
-  return raw.trim().replace(/^['"]+|['"]+$/g, "");
+  return raw
+    .trim()
+    .replace(/^['"]+|['"]+$/g, "")
+    .replace(/^\[/, "")
+    .replace(/\]$/, "")
+    .replace(/,$/, "")
+    .trim();
 }
 
 /** Comma- or whitespace-separated pool plus OPENAQ_API_KEY (deduped). */
@@ -76,10 +91,10 @@ export function openAqApiKeys(): string[] {
   if (multi) {
     for (const part of multi.split(/[\s,]+/)) {
       const k = normalizeOpenAqKey(part);
-      if (k) keys.push(k);
+      if (k && k !== "[" && k !== "]") keys.push(k);
     }
   }
-  return [...new Set(keys)];
+  return [...new Set(keys.filter(Boolean))];
 }
 
 export function openAqConfigured(): boolean {
@@ -87,21 +102,28 @@ export function openAqConfigured(): boolean {
 }
 
 async function openAqGet<T>(path: string): Promise<T> {
-  const key = openAqRequestKey(openAqApiKeys());
-  if (!key) throw new Error("OPENAQ_API_KEY not configured");
-  if (!takeOpenAqSlot()) throw new Error("OpenAQ budget");
+  const keys = openAqApiKeys();
+  if (keys.length === 0) throw new Error("OPENAQ_API_KEY not configured");
 
-  const res = await fetch(`${OPENAQ_BASE}${path}`, {
-    headers: { "X-API-Key": key },
-    signal: AbortSignal.timeout(25_000),
-  });
-  if (res.status === 429) {
-    const retry = res.headers.get("retry-after");
-    noteOpenAq429();
-    throw new Error(retry ? `OpenAQ 429 retry-after ${retry}` : "OpenAQ 429");
+  let lastError: Error | null = null;
+  // Walk the pool so one hot key does not stall the whole refresh.
+  for (let attempt = 0; attempt < keys.length; attempt++) {
+    const key = await takeOpenAqKeyOrWait(keys);
+    const res = await fetch(`${OPENAQ_BASE}${path}`, {
+      headers: { "X-API-Key": key },
+      signal: AbortSignal.timeout(25_000),
+    });
+    if (res.status === 429) {
+      const retry = res.headers.get("retry-after");
+      const retryAfterSec = retry != null && Number.isFinite(Number(retry)) ? Number(retry) : undefined;
+      noteOpenAq429({ key, retryAfterSec });
+      lastError = new Error(retry ? `OpenAQ 429 retry-after ${retry}` : "OpenAQ 429");
+      continue;
+    }
+    if (!res.ok) throw new Error(`OpenAQ ${res.status}`);
+    return res.json() as Promise<T>;
   }
-  if (!res.ok) throw new Error(`OpenAQ ${res.status}`);
-  return res.json() as Promise<T>;
+  throw lastError ?? new Error("OpenAQ budget");
 }
 
 async function mapConcurrent<T, R>(items: T[], concurrency: number, fn: (item: T) => Promise<R>): Promise<R[]> {

@@ -7,6 +7,7 @@ import { LegalFooter } from "./legal";
 import { Logo } from "./logo";
 import { formatWhen } from "./uiBits";
 import type { Auth, City } from "./api";
+import { AuthPanel } from "./authPanel";
 import "./shell.css";
 
 const NAV_OPEN: Record<string, string> = {
@@ -15,21 +16,6 @@ const NAV_OPEN: Record<string, string> = {
 
 const NAV_CLOSE: Record<string, string> = {
   en: "Close menu", hi: "मेनू बंद करें", mr: "मेनू बंद करा", bn: "মেনু বন্ধ করুন", ta: "மெனுவை மூடு", kn: "ಮೆನು ಮುಚ್ಚಿ", te: "మెనూ మూసివేయండి", zh: "关闭菜单", ru: "Закрыть меню", ar: "أغلق القائمة", id: "Tutup menu", pt: "Fechar menu",
-};
-
-const OP_SIGN: Record<string, string> = {
-  en: "Sign in",
-  hi: "साइन इन",
-  mr: "साइन इन",
-  bn: "সাইন ইন",
-  ta: "உள்நுழை",
-  kn: "ಸೈನ್ ಇನ್",
-  te: "సైన్ ఇన్",
-  zh: "登录",
-  ru: "Войти",
-  ar: "دخول",
-  id: "Masuk",
-  pt: "Entrar",
 };
 
 const OP_OPEN: Record<string, string> = {
@@ -197,7 +183,11 @@ export function Shell({
   logout,
   devAuth,
   authEmulator,
-  emulatorSignIn,
+  firebaseEnabled,
+  googleSignIn = true,
+  confirmedOperator,
+  signInEmail,
+  signInGoogle,
   children,
 }: {
   cities: City[];
@@ -209,14 +199,18 @@ export function Shell({
   logout: () => void;
   devAuth: boolean;
   authEmulator: string | null;
-  emulatorSignIn: (email: string, password: string) => Promise<{ idToken: string; email: string }>;
+  firebaseEnabled: boolean;
+  googleSignIn?: boolean;
+  confirmedOperator: boolean;
+  signInEmail: (email: string, password: string) => Promise<{ idToken: string; email: string }>;
+  signInGoogle: () => Promise<{ idToken: string; email: string }>;
   children: ReactNode;
 }) {
   const { lang, setLang } = useContext(LangContext);
   const { pathname } = useLocation();
   const [open, setOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
-  const [signError, setSignError] = useState<string | null>(null);
+  void authEmulator;
 
   useEffect(() => {
     setNavOpen(false);
@@ -284,7 +278,7 @@ export function Shell({
           <NavLink to="/diary">
             <span className="nav-item"><NavIcon name="diary" />{t(lang, "diary")}</span>
           </NavLink>
-          {auth?.operator ? (
+          {confirmedOperator ? (
             <>
               <NavLink to="/operator">
                 <span className="nav-item"><NavIcon name="operator" />{t(lang, "operator")}</span>
@@ -317,65 +311,41 @@ export function Shell({
                 {t(lang, "signOut")}
               </button>
             </div>
-          ) : devAuth ? (
-            <div className="account">
-              <button type="button" className="primary" onClick={() => login("resident@zephyr.local", false)}>
-                {t(lang, "resident")}
-              </button>
-              <button type="button" className="quiet" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
-                {OP_OPEN[lang] ?? OP_OPEN.en}
-              </button>
-            </div>
-          ) : null}
-          {authEmulator && !auth ? (
-            <form
-              className="operator-login"
-              onSubmit={(event) => {
-                event.preventDefault();
-                const data = new FormData(event.currentTarget);
-                const email = String(data.get("email") ?? "").trim();
-                const password = String(data.get("password") ?? "");
-                setSignError(null);
-                void emulatorSignIn(email, password).then((session) => {
-                  loginToken(session.email, session.idToken);
-                }).catch(() => setSignError(OP_SIGN[lang] ?? OP_SIGN.en));
-              }}
-            >
-              <label>
-                {t(lang, "operatorEmail")}
-                <input type="email" name="email" required autoComplete="username" />
-              </label>
-              <label>
-                {OP_SIGN[lang] ?? OP_SIGN.en}
-                <input type="password" name="password" required minLength={6} autoComplete="current-password" />
-              </label>
-              {signError ? <p className="error">{signError}</p> : null}
-              <button type="submit" className="primary">{OP_SIGN[lang] ?? OP_SIGN.en}</button>
-            </form>
-          ) : null}
-          {devAuth && open && !auth ? (
-            <form
-              className="operator-login"
-              onSubmit={(event) => {
-                event.preventDefault();
-                const email = String(new FormData(event.currentTarget).get("email") ?? "").trim();
-                if (!email) return;
-                login(email, true);
-                setOpen(false);
-              }}
-            >
-              <label>
-                {t(lang, "operatorEmail")}
-                <input type="email" name="email" required autoComplete="email" aria-describedby="operator-email-hint" />
-              </label>
-              <p className="muted" id="operator-email-hint">
-                {t(lang, "operatorEmailHint")}
-              </p>
-              <button type="submit" className="primary">
-                {OP_SIGN[lang] ?? OP_SIGN.en}
-              </button>
-            </form>
-          ) : null}
+          ) : (
+            <>
+              {devAuth && !firebaseEnabled ? (
+                <div className="account">
+                  <button type="button" className="primary" onClick={() => login("resident@zephyr.local", false)}>
+                    {t(lang, "resident")}
+                  </button>
+                  <button type="button" className="quiet" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+                    {OP_OPEN[lang] ?? OP_OPEN.en}
+                  </button>
+                </div>
+              ) : null}
+              {(firebaseEnabled || (devAuth && open)) ? (
+                <AuthPanel
+                  lang={lang}
+                  firebaseEnabled={firebaseEnabled}
+                  googleSignIn={googleSignIn}
+                  devAuth={devAuth}
+                  showDevOperator={open}
+                  onDevLogin={(email, asOperator) => {
+                    login(email, asOperator);
+                    setOpen(false);
+                  }}
+                  onFirebaseEmail={async (email, password) => {
+                    const session = await signInEmail(email, password);
+                    loginToken(session.email, session.idToken);
+                  }}
+                  onFirebaseGoogle={async () => {
+                    const session = await signInGoogle();
+                    loginToken(session.email, session.idToken);
+                  }}
+                />
+              ) : null}
+            </>
+          )}
         </div>
       </aside>
       <div className="shell-main">

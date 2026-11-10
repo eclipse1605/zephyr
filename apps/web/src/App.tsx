@@ -1,6 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { Route, Routes, useLocation } from "react-router-dom";
-import { ApiError, api, emulatorPassword, loadAuth, saveAuth, type Auth, type City } from "./api";
+import { ApiError, api, loadAuth, saveAuth, type Auth, type City, type Health } from "./api";
+import {
+  completeGoogleRedirect,
+  firebaseConfigured,
+  firebaseSignOut,
+  initFirebase,
+  refreshIdToken,
+  signInEmail,
+  signInGoogle,
+  watchFirebaseUser,
+} from "./auth";
 import { DiaryPage, OperatorPage, PipelinePage, ReportPage, TrackPage, ZonePage } from "./flows";
 import { Home } from "./home";
 import { LANGUAGES, langForCity } from "./i18n";
@@ -27,12 +37,18 @@ const FALLBACK_CITIES: City[] = [
 async function syncAuthOperator(session: Auth): Promise<Auth> {
   try {
     const me = await api.whoami(session);
-    const next = { ...session, operator: me.operator };
+    const next: Auth = {
+      ...session,
+      email: me.email || session.email,
+      operator: me.operator,
+      role: me.role,
+      permissions: me.permissions,
+    };
     saveAuth(next);
     return next;
   } catch (err) {
     if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
-      const next = { ...session, operator: false };
+      const next = { ...session, operator: false, role: "resident" as const, permissions: [] };
       saveAuth(next);
       return next;
     }
@@ -40,44 +56,96 @@ async function syncAuthOperator(session: Auth): Promise<Auth> {
   }
 }
 
-function useAuth() {
+function useAuth(firebaseReady: boolean) {
   const [auth, setAuth] = useState<Auth | null>(() => loadAuth());
+  const [rolePending, setRolePending] = useState(false);
+
+  const applySession = (session: Auth) => {
+    saveAuth(session);
+    setAuth(session);
+    setRolePending(true);
+    void syncAuthOperator(session).then((next) => {
+      setAuth(next);
+      setRolePending(false);
+    });
+  };
+
   const login = (email: string, asOperator: boolean) => {
     const session: Auth = {
       email,
       operator: false,
+      role: "resident",
       token: asOperator ? `operator:${email}` : `demo:${email}`,
+      source: "dev",
     };
-    saveAuth(session);
-    setAuth(session);
-    void syncAuthOperator(session).then(setAuth);
+    applySession(session);
   };
-  const loginToken = (email: string, token: string) => {
-    const session: Auth = { email, operator: false, token };
-    saveAuth(session);
-    setAuth(session);
-    void syncAuthOperator(session).then(setAuth);
+
+  const loginToken = (email: string, token: string, source: Auth["source"] = "firebase") => {
+    applySession({ email, operator: false, role: "resident", token, source });
   };
+
   const logout = () => {
     saveAuth(null);
     setAuth(null);
+    void firebaseSignOut();
   };
+
   useEffect(() => {
     const session = loadAuth();
     if (!session) return;
+    setRolePending(true);
     void syncAuthOperator(session).then((next) => {
       setAuth((current) => (current?.token === next.token ? next : current));
+      setRolePending(false);
     });
   }, []);
-  return { auth, login, loginToken, logout };
+
+  useEffect(() => {
+    if (!firebaseReady) return;
+    return watchFirebaseUser((user) => {
+      if (!user) return;
+      void user.getIdToken().then((token) => {
+        const session: Auth = {
+          email: user.email ?? "",
+          token,
+          operator: false,
+          role: "resident",
+          source: "firebase",
+        };
+        applySession(session);
+      });
+    });
+  }, [firebaseReady]);
+
+  useEffect(() => {
+    if (!auth || auth.source !== "firebase") return;
+    const id = window.setInterval(() => {
+      void refreshIdToken().then((token) => {
+        if (!token) return;
+        setAuth((current) => {
+          if (!current || current.token === token) return current;
+          const next = { ...current, token };
+          saveAuth(next);
+          return next;
+        });
+      });
+    }, 50 * 60 * 1000);
+    return () => window.clearInterval(id);
+  }, [auth?.source, auth?.email]);
+
+  return { auth, login, loginToken, logout, rolePending };
 }
 
 export function App() {
-  const { auth, login, loginToken, logout } = useAuth();
-  const location = useLocation();
   const [cities, setCities] = useState<City[]>([]);
   const [devAuth, setDevAuth] = useState(false);
   const [authEmulator, setAuthEmulator] = useState<string | null>(null);
+  const [firebaseReady, setFirebaseReady] = useState(false);
+  const [firebaseEnabled, setFirebaseEnabled] = useState(false);
+  const [googleSignIn, setGoogleSignIn] = useState(true);
+  const { auth, login, loginToken, logout, rolePending } = useAuth(firebaseReady);
+  const location = useLocation();
   const [cityId, setCityId] = useState("delhi");
   const savedLang = () => {
     const saved = localStorage.getItem("zephyr.lang");
@@ -91,12 +159,28 @@ export function App() {
 
   useEffect(() => {
     api.cities().then((r) => setCities(r.cities)).catch(() => setCities([]));
-    api.health().then((health) => {
+    api.health().then((health: Health) => {
       setDevAuth(health.devAuth === true);
       setAuthEmulator(health.authEmulator ?? null);
+      setGoogleSignIn(health.googleSignIn !== false);
+      const client = health.firebaseClient ?? null;
+      const enabled = firebaseConfigured(client) || firebaseConfigured();
+      setFirebaseEnabled(enabled);
+      if (enabled) {
+        initFirebase(client, health.authEmulator ?? null);
+        setFirebaseReady(true);
+        void completeGoogleRedirect()
+          .then((session) => {
+            if (!session) return;
+            loginToken(session.email, session.idToken);
+          })
+          .catch(() => undefined);
+      }
     }).catch(() => {
       setDevAuth(false);
       setAuthEmulator(null);
+      setFirebaseEnabled(false);
+      setGoogleSignIn(true);
     });
   }, []);
 
@@ -104,6 +188,8 @@ export function App() {
     () => (cities.length > 0 ? cities : FALLBACK_CITIES),
     [cities],
   );
+
+  const confirmedOperator = Boolean(auth?.operator && auth.role === "operator" && !rolePending);
 
   return (
     <LangContext.Provider value={{ lang, setLang }}>
@@ -117,7 +203,11 @@ export function App() {
         logout={logout}
         devAuth={devAuth}
         authEmulator={authEmulator}
-        emulatorSignIn={(email, password) => emulatorPassword(authEmulator ?? "", email, password)}
+        firebaseEnabled={firebaseEnabled}
+        googleSignIn={googleSignIn}
+        confirmedOperator={confirmedOperator}
+        signInEmail={(email, password) => signInEmail(email, password)}
+        signInGoogle={() => signInGoogle()}
       >
         <Routes>
           <Route path="/" element={<Home cityId={cityId} cityName={cityList.find((city) => city.id === cityId)?.name ?? ""} />} />
@@ -126,8 +216,44 @@ export function App() {
           <Route path="/track/:id" element={<TrackPage cityId={cityId} />} />
           <Route path="/zones/:h3" element={<ZonePage cityId={cityId} auth={auth} login={login} />} />
           <Route path="/diary" element={<DiaryPage cityId={cityId} cities={cityList} auth={auth} login={login} />} />
-          <Route path="/operator" element={<OperatorPage auth={auth} cityId={cityId} cities={cityList} login={login} />} />
-          <Route path="/pipeline" element={<PipelinePage auth={auth} cityId={cityId} cities={cityList} login={login} />} />
+          <Route
+            path="/operator"
+            element={
+              <OperatorPage
+                auth={auth}
+                cityId={cityId}
+                cities={cityList}
+                login={login}
+                loginToken={loginToken}
+                confirmedOperator={confirmedOperator}
+                rolePending={rolePending}
+                firebaseEnabled={firebaseEnabled}
+                googleSignIn={googleSignIn}
+                devAuth={devAuth}
+                signInEmail={(email, password) => signInEmail(email, password)}
+                signInGoogle={() => signInGoogle()}
+              />
+            }
+          />
+          <Route
+            path="/pipeline"
+            element={
+              <PipelinePage
+                auth={auth}
+                cityId={cityId}
+                cities={cityList}
+                login={login}
+                loginToken={loginToken}
+                confirmedOperator={confirmedOperator}
+                rolePending={rolePending}
+                firebaseEnabled={firebaseEnabled}
+                googleSignIn={googleSignIn}
+                devAuth={devAuth}
+                signInEmail={(email, password) => signInEmail(email, password)}
+                signInGoogle={() => signInGoogle()}
+              />
+            }
+          />
           <Route path="/privacy" element={<PrivacyPage />} />
           <Route path="/terms" element={<TermsPage />} />
           <Route path="/disclaimer" element={<DisclaimerPage />} />

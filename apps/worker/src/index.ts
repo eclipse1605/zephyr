@@ -2,7 +2,7 @@ import { config as loadEnv } from "dotenv";
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { processReportMessage, runTick, deliverPendingTasks, syncState, openStore, resolveFromRoot, resolveListenPort, authorizeInternal, refreshWindGrid, enqueueIngestJobs, claimNextJob, runClaimedJob, newId } from "@zephyr/server";
+import { processReportMessage, runTick, deliverPendingTasks, syncState, openStore, resolveFromRoot, resolveListenPort, authorizeInternal, refreshWindGrid, enqueueIngestJobs, drainIngestJobs, newId } from "@zephyr/server";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = process.env.ZEPHYR_ROOT ?? path.resolve(__dirname, "../../..");
@@ -49,31 +49,49 @@ app.post("/internal/wind", async (_req, res) => {
   }
 });
 
+function ingestRunOpts() {
+  return {
+    store,
+    fixturesRoot: FIXTURES,
+    dataDir: DATA,
+    sampleWindPath: path.join(FIXTURES, "wind", "sample.json"),
+  };
+}
+
+function ingestDrainBatch(): number {
+  const raw = Number(process.env.INGEST_DRAIN_BATCH ?? 16);
+  return Number.isFinite(raw) ? Math.min(50, Math.max(1, Math.floor(raw))) : 16;
+}
+
 app.post("/internal/tick", async (_req, res) => {
-  // Scheduler only enqueues; workers claim shards separately.
+  // Cloud Run: scheduler enqueues; workers claim via /internal/jobs/run.
+  // Local: enqueue and drain so operator "Run tick" actually refreshes.
   const queued = await enqueueIngestJobs(store);
-  res.json({ ok: true, enqueued: queued.enqueued, jobIds: queued.jobIds });
+  if (process.env.K_SERVICE?.trim()) {
+    return res.json({ ok: true, enqueued: queued.enqueued, jobIds: queued.jobIds, drained: 0 });
+  }
+  const opts = ingestRunOpts();
+  let drained = 0;
+  // Safety cap: many city pages if INGEST_PAGE_SIZE is small.
+  for (let i = 0; i < 500; i++) {
+    const batch = await drainIngestJobs(opts, ingestDrainBatch());
+    if (batch.ran === 0) break;
+    drained += batch.ran;
+  }
+  res.json({ ok: true, enqueued: queued.enqueued, jobIds: queued.jobIds, drained });
 });
 
 app.post("/internal/jobs/run", async (_req, res) => {
-  const job = await claimNextJob(store, {
-    store,
-    fixturesRoot: FIXTURES,
-    dataDir: DATA,
-    sampleWindPath: path.join(FIXTURES, "wind", "sample.json"),
-  });
-  if (!job) {
+  // Default clears one tick enqueue (12 city catalogs + wind + ops) in a single drain.
+  const batch = ingestDrainBatch();
+  const opts = ingestRunOpts();
+  const drained = await drainIngestJobs(opts, batch);
+  if (drained.ran === 0) {
     await deliverPendingTasks(store);
     await syncState(store).catch(() => undefined);
-    return res.json({ ok: true, ran: false });
+    return res.json({ ok: true, ran: false, drained: 0 });
   }
-  await runClaimedJob(job, {
-    store,
-    fixturesRoot: FIXTURES,
-    dataDir: DATA,
-    sampleWindPath: path.join(FIXTURES, "wind", "sample.json"),
-  });
-  res.json({ ok: true, ran: true, jobId: job.id, kind: job.kind, shard: job.shard });
+  res.json({ ok: true, ran: true, drained: drained.ran });
 });
 
 app.post("/internal/pubsub/reports", async (req, res) => {

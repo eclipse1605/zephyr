@@ -249,6 +249,10 @@ async function loadCityReadings(db: Db, cityId: string, fixturesRoot: string, mo
   for (const feed of live.feeds) {
     db.ingest.feeds[`${cityId}:${feed.source}`] = { ok: feed.ok, error: feed.error, count: feed.count };
   }
+  // Drop stale CPCB failures left from earlier runs when the key is still unset.
+  if (!process.env.CPCB_API_KEY?.trim()) {
+    delete db.ingest.feeds[`${cityId}:cpcb`];
+  }
   return live.readings.filter((reading) => reading.sourceFeed !== "waqi");
 }
 
@@ -381,6 +385,22 @@ async function runCatalogPage(job: IngestJob, opts: IngestRunOptions): Promise<v
   if (!city) {
     job.status = "done";
     job.finishedAt = nowIso(now);
+    job.updatedAt = nowIso(now);
+    db.ingestJobs[job.id] = job;
+    await opts.store.write(db);
+    return;
+  }
+  const openaqFeed = db.ingest.feeds[`${cityId}:openaq`];
+  const openaqFailed = Boolean(openaqFeed && !openaqFeed.ok);
+  // Keep the previous catalog when live OpenAQ returns nothing — do not zero stationCounts.
+  if (mode === "live" && readings.length === 0 && openaqFailed) {
+    db.ingest.stationCounts[cityId] = Object.values(db.stations).filter((s) => s.cityId === cityId).length;
+    job.cursor = null;
+    job.status = "done";
+    job.finishedAt = nowIso(now);
+    job.updatedAt = nowIso(now);
+    db.ingestJobs[job.id] = job;
+    await opts.store.write(db);
     return;
   }
   const merged = mergeStations(readings, city.aqiScale, now);

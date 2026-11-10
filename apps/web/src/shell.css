@@ -251,6 +251,11 @@
   padding-inline: 0;
 }
 
+.auth-panel {
+  display: grid;
+  gap: 8px;
+}
+
 .operator-login {
   display: grid;
   gap: 8px;

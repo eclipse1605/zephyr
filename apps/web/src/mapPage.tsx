@@ -5,13 +5,23 @@ import type * as MapLibre from "maplibre-gl";
 import { api, type City, type MapIncident, type Station } from "./api";
 import { t } from "./i18n";
 import { useLang } from "./lang";
-import { MAP_DARK, retryLabel } from "./mapStyle";
+import { mapStyleUrl, retryLabel } from "./mapStyle";
 import { enumText, sourceLabel } from "./flows";
-import { aqiTone, PageHead } from "./uiBits";
-import { attachWind } from "./windField";
+import { aqiTone } from "./uiBits";
+import { attachWind, type WindGrid, type WindHandle } from "./windField";
 import "./map.css";
+
 const OFFLINE_ZOOM = 12;
+const LABEL_ZOOM = 6.2;
+/** Below this, station pins add noise on the globe — haze + field carry the signal. */
+const STATION_ZOOM = 4.5;
+const SURFACE_ZOOM = 7.5;
 const NEAR_PX = 40;
+const MOVE_DEBOUNCE_MS = 180;
+const BOUNDS_PAD = 0.08;
+const MARKER_CAP = 500;
+/** Cap pairwise clustering work so dense live feeds stay cheap. */
+const OFFSET_CAP = 80;
 
 type Place = (el: HTMLElement, lng: number, lat: number, popup?: string, offset?: [number, number]) => void;
 
@@ -61,7 +71,7 @@ const PARTIAL_NOTE: Record<string, string> = {
   pt: "Algumas camadas não carregaram",
 };
 
-const SOURCE_LINE = "The color field is an Open-Meteo / CAMS model, not the city number. Stations: OpenAQ and CPCB are stored. WAQI is shown live and is not stored.";
+const SOURCE_LINE = "Color field: Open-Meteo / CAMS model. Pins: OpenAQ & CPCB (stored); WAQI live only.";
 
 function layerName(lang: string, id: "stations" | "wards" | "fires"): string {
   return LAYER_NAME[id][lang] ?? LAYER_NAME[id].en;
@@ -76,7 +86,74 @@ function esc(value: string): string {
 
 function isOffline(station: Station): boolean {
   if (station.online === false) return true;
-  return station.aqi == null || Number.isNaN(station.aqi);
+  if (station.aqi == null || Number.isNaN(station.aqi)) return true;
+  // Zero is almost always a bad/empty feed, not a real "perfect" reading.
+  return station.aqi <= 0;
+}
+
+function aqiFill(aqi: number): string {
+  if (aqi <= 50) return "#3dd68c";
+  if (aqi <= 100) return "#b6e36a";
+  if (aqi <= 200) return "#ffd666";
+  if (aqi <= 300) return "#f5a524";
+  if (aqi <= 400) return "#ff8a4a";
+  return "#d64532";
+}
+
+function ensureHaze(map: MapLibre.Map) {
+  if (map.getSource("aqi-haze")) return;
+  map.addSource("aqi-haze", {
+    type: "geojson",
+    data: { type: "FeatureCollection", features: [] },
+  });
+  map.addLayer({
+    id: "aqi-haze",
+    type: "circle",
+    source: "aqi-haze",
+    paint: {
+      "circle-radius": [
+        "interpolate",
+        ["linear"],
+        ["zoom"],
+        1.5, 14,
+        4, 24,
+        7, 42,
+        10, 68,
+        13, 96,
+      ],
+      "circle-color": ["get", "color"],
+      "circle-opacity": [
+        "interpolate",
+        ["linear"],
+        ["zoom"],
+        2, 0.18,
+        8, 0.14,
+        12, 0.1,
+      ],
+      "circle-blur": 0.95,
+    },
+  });
+}
+
+type HazeFeature = {
+  type: "Feature";
+  properties: { color: string; aqi: number };
+  geometry: { type: "Point"; coordinates: [number, number] };
+};
+
+function setHaze(map: MapLibre.Map, stations: Station[]) {
+  const source = map.getSource("aqi-haze") as { setData?: (data: { type: "FeatureCollection"; features: HazeFeature[] }) => void } | undefined;
+  if (!source?.setData) return;
+  const features: HazeFeature[] = [];
+  for (const station of stations) {
+    if (isOffline(station) || station.aqi == null) continue;
+    features.push({
+      type: "Feature",
+      properties: { color: aqiFill(station.aqi), aqi: station.aqi },
+      geometry: { type: "Point", coordinates: [station.lng, station.lat] },
+    });
+  }
+  source.setData({ type: "FeatureCollection", features });
 }
 
 const STALE_LIVE: Record<string, string> = {
@@ -107,13 +184,13 @@ function readingIsOld(iso: string | null | undefined): boolean {
 
 function ringOffset(index: number, count: number): [number, number] {
   if (count < 2) return [0, 0];
-  const radius = count > 4 ? 8 * count : 24;
+  const radius = count > 4 ? 10 * count : 28;
   const theta = (2 * Math.PI * index) / count;
   return [radius * Math.sin(theta), -radius * Math.cos(theta)];
 }
 
 function liveOffsets(map: MapLibre.Map, stations: Station[]): Map<Station, [number, number]> {
-  const live = stations.filter((station) => !isOffline(station));
+  const live = stations.filter((station) => !isOffline(station)).slice(0, OFFSET_CAP);
   const points = live.map((station) => map.project([station.lng, station.lat]));
   const parent = live.map((_, index) => index);
   const find = (index: number) => {
@@ -155,6 +232,28 @@ function incidentPoint(station: Station): MapIncident | null {
   return null;
 }
 
+function boundsKey(map: MapLibre.Map): string {
+  const b = map.getBounds();
+  const sw = b.getSouthWest();
+  const ne = b.getNorthEast();
+  const q = (n: number) => n.toFixed(2);
+  return `${q(sw.lng)}:${q(sw.lat)}:${q(ne.lng)}:${q(ne.lat)}:${map.getZoom().toFixed(1)}`;
+}
+
+function paddedBounds(map: MapLibre.Map): { west: number; south: number; east: number; north: number } {
+  const b = map.getBounds();
+  const sw = b.getSouthWest();
+  const ne = b.getNorthEast();
+  const padLng = Math.max(0.2, (ne.lng - sw.lng) * BOUNDS_PAD);
+  const padLat = Math.max(0.15, (ne.lat - sw.lat) * BOUNDS_PAD);
+  return {
+    west: sw.lng - padLng,
+    south: sw.lat - padLat,
+    east: ne.lng + padLng,
+    north: ne.lat + padLat,
+  };
+}
+
 function placeIncident(
   place: Place,
   incident: MapIncident,
@@ -194,7 +293,12 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
   const markers = useRef<MapLibre.Marker[]>([]);
   const navigate = useNavigate();
   const [pitched, setPitched] = useState(false);
+  const pitchedRef = useRef(false);
   const [windOn, setWindOn] = useState(true);
+  const windOnRef = useRef(windOn);
+  windOnRef.current = windOn;
+  const windHandle = useRef<WindHandle | null>(null);
+  const windGrid = useRef<WindGrid | null>(null);
   const [mapEpoch, setMapEpoch] = useState(0);
   const [counts, setCounts] = useState<LegendCounts>(EMPTY_COUNTS);
   const [mapNote, setMapNote] = useState<"loading" | "error" | null>("loading");
@@ -225,26 +329,163 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
     let alive = true;
     let map: MapLibre.Map | null = null;
     let bootTimer = 0;
+    let themeObserver: MutationObserver | null = null;
     void import("maplibre-gl").then((maplibregl) => {
       if (!alive) return;
       ml.current = maplibregl;
+      let styleUrl = mapStyleUrl();
       map = new maplibregl.Map({
         container,
-        style: MAP_DARK,
+        style: styleUrl,
         center: [start.lng, start.lat],
-        zoom: 1.5,
+        zoom: 2.2,
+        maxPitch: 70,
+        fadeDuration: 0,
       });
       mapObj.current = map;
       const modelMap = map;
-      // Epoch opens wind/pins as soon as the map exists; raster waits for style.
-      setMapEpoch((n) => Math.max(1, n + 1));
+      (window as unknown as { __zephyrMap?: typeof map }).__zephyrMap = map;
+      let globeReady = false;
+      let epochOpened = false;
+      const openEpoch = () => {
+        if (!alive || epochOpened) return;
+        epochOpened = true;
+        setMapEpoch((n) => Math.max(1, n + 1));
+      };
+      const addRaster = () => {
+        if (!alive) return;
+        try {
+          const layer = rasterRef.current;
+          // Globe/continent: overzoom a coarse maxzoom so GPU linear filtering hides seams.
+          // City zoom: swap to detail. Never stack both at once (that caused hard rectangles).
+          const tileUrl = `/api/v1/model/tiles/${layer}/{z}/{x}/{y}?v=16&m=8`;
+          // Drop stale sources from earlier HMR sessions.
+          for (const id of ["model-raster", "model-raster-base", "model-field", "aqi-haze"] as const) {
+            if (modelMap.getLayer(id)) modelMap.removeLayer(id);
+            if (modelMap.getSource(id)) modelMap.removeSource(id);
+          }
+          // Globe/continent: one world image — every continent, no per-tile seams on the sphere.
+          const fz = 2;
+          const fx0 = 0;
+          const fx1 = 3;
+          const fy0 = 0;
+          const fy1 = 3;
+          const tileLng = (z: number, x: number) => (x / 2 ** z) * 360 - 180;
+          const tileLat = (z: number, y: number) => {
+            const n = Math.PI - (2 * Math.PI * y) / 2 ** z;
+            return (180 / Math.PI) * Math.atan(Math.sinh(n));
+          };
+          const west = tileLng(fz, fx0);
+          const east = tileLng(fz, fx1 + 1);
+          const north = tileLat(fz, fy0);
+          const south = tileLat(fz, fy1 + 1);
+          if (!modelMap.getSource("model-field")) {
+            modelMap.addSource("model-field", {
+              type: "image",
+              url: `/api/v1/model/field/${layer}?z=${fz}&x0=${fx0}&x1=${fx1}&y0=${fy0}&y1=${fy1}&v=20`,
+              coordinates: [
+                [west, north],
+                [east, north],
+                [east, south],
+                [west, south],
+              ],
+            });
+            modelMap.addLayer({
+              id: "model-field",
+              type: "raster",
+              source: "model-field",
+              paint: {
+                "raster-opacity": [
+                  "interpolate",
+                  ["linear"],
+                  ["zoom"],
+                  3.8,
+                  0.5,
+                  4.4,
+                  0,
+                ],
+                "raster-fade-duration": 280,
+                "raster-resampling": "linear",
+              },
+            });
+          }
+          if (!modelMap.getSource("model-raster")) {
+            modelMap.addSource("model-raster", {
+              type: "raster",
+              tiles: [tileUrl],
+              tileSize: 256,
+              maxzoom: 8,
+              attribution: "Open-Meteo / CAMS",
+            });
+            modelMap.addLayer({
+              id: "model-raster",
+              type: "raster",
+              source: "model-raster",
+              paint: {
+                "raster-opacity": [
+                  "interpolate",
+                  ["linear"],
+                  ["zoom"],
+                  3.8,
+                  0,
+                  4.4,
+                  0.48,
+                ],
+                "raster-fade-duration": 280,
+                "raster-resampling": "linear",
+              },
+            });
+          }
+          ensureHaze(modelMap);
+        } catch {
+          return;
+        }
+      };
+      map.on("style.load", () => {
+        if (!globeReady) {
+          globeReady = true;
+          try {
+            (modelMap as MapLibre.Map & { setProjection?: (projection: { type: "globe" }) => void }).setProjection?.({ type: "globe" });
+          } catch {
+            // flat map is fine if globe projection is unavailable
+          }
+          try {
+            (modelMap as MapLibre.Map & { setFog?: (fog: Record<string, unknown> | null) => void }).setFog?.({
+              color: "rgb(10, 16, 24)",
+              "high-color": "rgb(28, 48, 78)",
+              "horizon-blend": 0.06,
+              "space-color": "rgb(3, 6, 12)",
+              "star-intensity": 0.45,
+            });
+          } catch {
+            // fog is optional polish
+          }
+        }
+        window.setTimeout(addRaster, 0);
+        // Style is enough to place markers/camera; don't wait forever on tile `load`.
+        window.setTimeout(openEpoch, 0);
+      });
+      map.on("load", () => {
+        addRaster();
+        openEpoch();
+      });
       map.on("click", (event) => {
         const target = event.originalEvent.target;
         if (target instanceof Element && target.closest(".maplibregl-marker")) return;
         void fetch(`/api/v1/model/point?lat=${event.lngLat.lat}&lng=${event.lngLat.lng}`)
-          .then((res) => (res.ok ? res.json() : null))
-          .then((point: { aqi?: number | null; pm25?: number | null; pm10?: number | null; no2?: number | null; ozone?: number | null; so2?: number | null; co?: number | null; attribution?: string; note?: string } | null) => {
-            if (!point || !alive) return;
+          .then(async (res) => {
+            const body = await res.json().catch(() => null) as
+              | { error?: string; aqi?: number | null; pm25?: number | null; pm10?: number | null; no2?: number | null; ozone?: number | null; so2?: number | null; co?: number | null; attribution?: string; note?: string }
+              | null;
+            if (!alive) return;
+            if (!res.ok || !body || body.error) {
+              new maplibregl.Popup({ offset: 12 })
+                .setLngLat(event.lngLat)
+                .setHTML(`<strong>Model</strong><br/>Unavailable right now${body?.error ? ` (${esc(body.error)})` : ""}.`)
+                .addTo(modelMap);
+              return;
+            }
+            const point = body;
             const line = (label: string, value: number | null | undefined, unit = "µg/m³") =>
               value == null ? "" : `<br/>${label} ${Math.round(value)} ${unit}`;
             new maplibregl.Popup({ offset: 12 })
@@ -254,86 +495,104 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
           })
           .catch(() => undefined);
       });
-      const addRaster = () => {
-        if (!alive) return;
-        try {
-          const layer = rasterRef.current;
-          if (!modelMap.getSource("model-raster")) {
-            modelMap.addSource("model-raster", {
-              type: "raster",
-              tiles: [`/api/v1/model/tiles/${layer}/{z}/{x}/{y}`],
-              tileSize: 256,
-              maxzoom: 8,
-              attribution: "Open-Meteo / CAMS",
-            });
-            modelMap.addLayer({ id: "model-raster", type: "raster", source: "model-raster", paint: { "raster-opacity": 0.72 } });
-          }
-        } catch {
-          return;
-        }
-      };
-      map.on("style.load", () => {
-        try {
-          (modelMap as MapLibre.Map & { setProjection?: (projection: { type: "globe" }) => void }).setProjection?.({ type: "globe" });
-        } catch {
-          // flat map is fine if globe projection is unavailable
-        }
-        // Projection can rebuild the style; add the raster on the next task.
-        window.setTimeout(addRaster, 0);
-      });
-      map.on("load", addRaster);
       map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
-      bootTimer = window.setTimeout(addRaster, 1200);
+      themeObserver = new MutationObserver(() => {
+        const next = mapStyleUrl();
+        if (next === styleUrl || !alive) return;
+        styleUrl = next;
+        globeReady = false;
+        modelMap.setStyle(next);
+      });
+      themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+      bootTimer = window.setTimeout(() => {
+        addRaster();
+        openEpoch();
+      }, 900);
     });
     return () => {
       alive = false;
+      themeObserver?.disconnect();
       window.clearTimeout(bootTimer);
       markers.current.forEach((m) => m.remove());
       markers.current = [];
       map?.remove();
       mapObj.current = null;
+      delete (window as unknown as { __zephyrMap?: unknown }).__zephyrMap;
       setMapEpoch(0);
     };
-    // Keep one MapLibre instance; city changes fly the camera instead of remounting.
   }, [city ? "ready" : "wait"]);
 
   useEffect(() => {
     const map = mapObj.current;
     if (!map || !city || mapEpoch === 0) return;
-    map.easeTo({ center: [city.center.lng, city.center.lat], zoom: 9.5, duration: 900, essential: true });
+    // Instant jump — a long easeTo during tile reload was the city-switch hitch.
+    // Reset tilt on city change so globe/city switches don't keep a sideways pitch.
+    pitchedRef.current = false;
+    setPitched(false);
+    map.stop();
+    map.jumpTo({
+      center: [city.center.lng, city.center.lat],
+      zoom: 9.5,
+      pitch: 0,
+      bearing: 0,
+    });
   }, [cityId, city?.center.lat, city?.center.lng, mapEpoch]);
 
   useEffect(() => {
     const map = mapObj.current;
-    if (!map || !windOn || mapEpoch === 0) return;
-    let cancel = () => {};
+    if (!map || mapEpoch === 0) return;
     let stopped = false;
-    const start = (grid: { cells?: Array<{ lat: number; lng: number; u: number; v: number }> } | null) => {
-      if (stopped || !grid?.cells?.length) return;
-      cancel();
-      cancel = attachWind(map, { cells: grid.cells });
+
+    const mount = (grid: WindGrid) => {
+      if (stopped) return;
+      windGrid.current = grid;
+      windHandle.current?.destroy();
+      const handle = attachWind(map, grid);
+      handle.setEnabled(windOnRef.current);
+      windHandle.current = handle;
     };
-    void fetch("/api/v1/model/wind")
-      .then((res) => (res.ok ? res.json() : null))
-      .then(start)
-      .catch(() => undefined);
+
+    if (windGrid.current?.cells.length) {
+      mount(windGrid.current);
+    } else {
+      void fetch("/api/v1/model/wind")
+        .then((res) => (res.ok ? res.json() : null))
+        .then((body: { cells?: WindGrid["cells"] } | null) => {
+          if (stopped || !body?.cells?.length) return;
+          mount({ cells: body.cells });
+        })
+        .catch(() => undefined);
+    }
+
     return () => {
       stopped = true;
-      cancel();
+      windHandle.current?.destroy();
+      windHandle.current = null;
     };
-  }, [windOn, mapEpoch, cityId]);
+  }, [mapEpoch]);
+
+  useEffect(() => {
+    windHandle.current?.setEnabled(windOn);
+  }, [windOn, mapEpoch]);
 
   useEffect(() => {
     const map = mapObj.current;
     const source = map?.getSource("model-raster") as { setTiles?: (tiles: string[]) => void } | undefined;
-    source?.setTiles?.([`/api/v1/model/tiles/${raster}/{z}/{x}/{y}`]);
+    source?.setTiles?.([`/api/v1/model/tiles/${raster}/{z}/{x}/{y}?v=16&m=8`]);
+    const field = map?.getSource("model-field") as { updateImage?: (opts: { url: string }) => void } | undefined;
+    field?.updateImage?.({
+      url: `/api/v1/model/field/${raster}?z=2&x0=0&x1=3&y0=0&y1=3&v=20`,
+    });
   }, [raster, mapEpoch]);
 
   useEffect(() => {
     const map = mapObj.current;
-    if (!map) return;
-    map.easeTo({ pitch: pitched ? 60 : 0, zoom: pitched ? 15 : map.getZoom(), duration: 700 });
-  }, [pitched]);
+    if (!map || mapEpoch === 0) return;
+    if (pitchedRef.current === pitched) return;
+    pitchedRef.current = pitched;
+    // Pitch-only; do not reset zoom/center (that fights city flyTo).
+    map.easeTo({ pitch: pitched ? 55 : 0, duration: 700, essential: true });
+  }, [pitched, mapEpoch]);
 
   useEffect(() => {
     const map = mapObj.current;
@@ -341,6 +600,8 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
     if (!map || !maplibregl || mapEpoch === 0) return;
     let cancelled = false;
     let payload: MapPayload | null = null;
+    let lastKey = "";
+    let debounce = 0;
     setMapNote("loading");
 
     const place: Place = (el, lng, lat, popup, offset) => {
@@ -365,60 +626,86 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
     const draw = (data: MapPayload) => {
       markers.current.forEach((marker) => marker.remove());
       markers.current = [];
-      const hideOffline = map.getZoom() < OFFLINE_ZOOM;
+      const zoom = map.getZoom();
+      const hideOffline = zoom < OFFLINE_ZOOM;
+      const showStations = zoom >= STATION_ZOOM;
+      const showLabels = zoom >= LABEL_ZOOM;
+      const showSurfaces = zoom >= SURFACE_ZOOM;
+      const box = paddedBounds(map);
+      const inView = (lat: number, lng: number) =>
+        lat >= box.south && lat <= box.north && lng >= box.west && lng <= box.east;
+      const viewStations = data.stations.filter((s) => inView(s.lat, s.lng));
       const seen = new Set<string>();
-      const offsets = liveOffsets(map, data.stations);
+      const offsets = showLabels ? liveOffsets(map, viewStations) : new Map<Station, [number, number]>();
       let liveCount = 0;
       let offlineCount = 0;
       let uncoveredCount = 0;
+      let placed = 0;
+      try {
+        ensureHaze(map);
+        setHaze(map, viewStations);
+      } catch {
+        // haze is progressive polish
+      }
 
-      for (const s of data.stations) {
+      for (const s of viewStations) {
         if (cancelled) return;
         const offline = isOffline(s);
         if (offline) offlineCount += 1;
         else liveCount += 1;
-        if (!(offline && hideOffline)) {
-          const el = document.createElement("button");
-          el.type = "button";
-          if (offline) {
-            const label = t(lang, "offline");
-            el.className = "pin station is-offline";
-            el.textContent = label;
-            el.setAttribute("aria-label", readingsStale ? `${s.name} ${label}. ${staleLive(lang)}` : `${s.name} ${label}`);
-          } else {
-            const rounded = Math.round(s.aqi ?? 0);
-            el.className = readingsStale ? "pin station is-stale" : `pin station tone-${aqiTone(rounded)}`;
-            el.textContent = String(rounded);
-            el.setAttribute("aria-label", readingsStale ? `${s.name} ${rounded}. ${staleLive(lang)}` : `${s.name} ${rounded}`);
-          }
-          const cell = s.h3 || latLngToCell(s.lat, s.lng, 8);
-          const zone = `<br/><a href="/zones/${esc(cell)}">${esc(t(lang, "zoneLink"))}</a>`;
-          const aqiText = offline ? esc(t(lang, "offline")) : String(Math.round(s.aqi ?? 0));
-          const staleLine = readingsStale ? `<br/>${esc(staleLive(lang))}` : "";
-          const sourceLine = s.sourceFeed ? `<br/>${esc(sourceLabel(lang, s.sourceFeed))}` : "";
-          const popup = `<strong>${esc(s.name)}</strong><br/>${esc(t(lang, "aqi"))} ${aqiText}${sourceLine}${staleLine}${zone}`;
-          place(el, s.lng, s.lat, popup, offline ? undefined : offsets.get(s));
+        if (!showStations) continue;
+        if (offline && hideOffline) continue;
+        if (placed >= MARKER_CAP) continue;
+        placed += 1;
+        const el = document.createElement("button");
+        el.type = "button";
+        if (offline) {
+          const label = t(lang, "offline");
+          el.className = showLabels ? "pin station is-offline" : "pin station is-offline is-dot";
+          el.textContent = showLabels ? label : "";
+          el.setAttribute("aria-label", readingsStale ? `${s.name} ${label}. ${staleLive(lang)}` : `${s.name} ${label}`);
+        } else {
+          const rounded = Math.round(s.aqi ?? 0);
+          const tone = readingsStale ? "is-stale" : `tone-${aqiTone(rounded)}`;
+          el.className = showLabels ? `pin station ${tone}` : `pin station is-dot ${tone}`;
+          el.textContent = showLabels ? String(rounded) : "";
+          el.setAttribute("aria-label", readingsStale ? `${s.name} ${rounded}. ${staleLive(lang)}` : `${s.name} ${rounded}`);
         }
+        const cell = s.h3 || latLngToCell(s.lat, s.lng, 8);
+        const zone = `<br/><a href="/zones/${esc(cell)}">${esc(t(lang, "zoneLink"))}</a>`;
+        const aqiText = offline ? esc(t(lang, "offline")) : String(Math.round(s.aqi ?? 0));
+        const staleLine = readingsStale ? `<br/>${esc(staleLive(lang))}` : "";
+        const sourceLine = s.sourceFeed ? `<br/>${esc(sourceLabel(lang, s.sourceFeed))}` : "";
+        const popup = `<strong>${esc(s.name)}</strong><br/>${esc(t(lang, "aqi"))} ${aqiText}${sourceLine}${staleLine}${zone}`;
+        place(el, s.lng, s.lat, popup, offline || !showLabels ? undefined : offsets.get(s));
         const incident = incidentPoint(s);
         if (incident) placeIncident(place, incident, s.lng, s.lat, lang, navigate, seen);
       }
 
-      for (const cell of data.surfaces) {
-        if (cell.publishedAqi == null) continue;
-        let center: [number, number];
-        try {
-          center = cellToLatLng(cell.h3);
-        } catch {
-          continue;
+      if (showSurfaces) {
+        for (const cell of data.surfaces) {
+          if (cell.publishedAqi == null) continue;
+          if (placed >= MARKER_CAP) break;
+          let center: [number, number];
+          try {
+            center = cellToLatLng(cell.h3);
+          } catch {
+            continue;
+          }
+          if (!inView(center[0], center[1])) continue;
+          placed += 1;
+          const el = document.createElement("button");
+          el.type = "button";
+          el.className = `pin hex tone-${aqiTone(cell.publishedAqi)}`;
+          el.textContent = String(Math.round(cell.publishedAqi));
+          place(el, center[1], center[0], `<a href="/zones/${esc(cell.h3)}">${esc(t(lang, "zoneLink"))}</a>`);
         }
-        const el = document.createElement("button");
-        el.type = "button";
-        el.className = `pin hex tone-${aqiTone(cell.publishedAqi)}`;
-        el.textContent = String(Math.round(cell.publishedAqi));
-        place(el, center[1], center[0], `<a href="/zones/${esc(cell.h3)}">${esc(t(lang, "zoneLink"))}</a>`);
       }
 
       for (const f of data.fires) {
+        if (!inView(f.lat, f.lng)) continue;
+        if (placed >= MARKER_CAP) break;
+        placed += 1;
         const el = document.createElement("button");
         el.type = "button";
         el.className = "pin fire";
@@ -447,21 +734,25 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
       }
 
       setCounts({
-        live: liveCount,
-        offline: offlineCount,
+        live: showStations ? liveCount : 0,
+        offline: showStations ? offlineCount : 0,
         fire: data.fires.length,
         incident: seen.size,
         uncovered: uncoveredCount,
-        offlineHidden: hideOffline ? offlineCount : 0,
+        offlineHidden: showStations && hideOffline ? offlineCount : 0,
       });
     };
 
-    const refreshStations = () => {
+    const refreshStations = (force = false) => {
       if (cancelled || !payload) return;
-      const next = map.getBounds();
-      const sw = next.getSouthWest();
-      const ne = next.getNorthEast();
-      void api.stationsInBounds({ west: sw.lng, south: sw.lat, east: ne.lng, north: ne.lat }).then((value) => {
+      const key = boundsKey(map);
+      if (!force && key === lastKey) {
+        draw(payload);
+        return;
+      }
+      lastKey = key;
+      const box = paddedBounds(map);
+      void api.stationsInBounds(box).then((value) => {
         if (cancelled || !payload) return;
         payload.stations = value.stations;
         payload.surfaces = value.surfaces ?? [];
@@ -469,85 +760,94 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
       }).catch(() => undefined);
     };
 
+    const onMoveEnd = () => {
+      // Restyle pins immediately (labels/dots/offline) from cached payload; debounce only the network refresh.
+      if (payload) draw(payload);
+      window.clearTimeout(debounce);
+      debounce = window.setTimeout(() => refreshStations(false), MOVE_DEBOUNCE_MS);
+    };
+
     const onZoomEnd = () => {
-      if (cancelled || !payload) return;
-      refreshStations();
+      if (payload) draw(payload);
+      window.clearTimeout(debounce);
+      debounce = window.setTimeout(() => refreshStations(false), MOVE_DEBOUNCE_MS);
     };
 
     map.on("zoomend", onZoomEnd);
-    map.on("moveend", refreshStations);
+    map.on("moveend", onMoveEnd);
 
     payload = { stations: [], wards: [], fires: [], surfaces: [], incidents: [] };
     const missing: Array<"stations" | "wards" | "fires"> = [];
     let pending = 3;
-    const finishOne = () => {
+    // Keep prior pins until the first successful station paint (avoids empty flash + triple rebuild).
+    const finishOne = (layer: "stations" | "wards" | "fires") => {
       pending -= 1;
       if (cancelled || !payload) return;
-      draw(payload);
+      if (layer === "stations" || pending === 0) draw(payload);
       if (pending > 0) {
-        setMapNote("loading");
+        if (layer !== "stations") setMapNote("loading");
         return;
       }
       setMapMissing(missing);
       setMapNote(missing.length > 0 ? "error" : null);
     };
 
-    const bounds = map.getBounds();
-    const sw = bounds.getSouthWest();
-    const ne = bounds.getNorthEast();
-    void api.stationsInBounds({ west: sw.lng, south: sw.lat, east: ne.lng, north: ne.lat }).then((value) => {
+    lastKey = boundsKey(map);
+    const box = paddedBounds(map);
+    void api.stationsInBounds(box).then((value) => {
       if (cancelled || !payload) return;
       payload.stations = value.stations;
       payload.surfaces = value.surfaces ?? [];
-      finishOne();
+      finishOne("stations");
     }).catch(() => {
       missing.push("stations");
-      finishOne();
+      finishOne("stations");
     });
     void api.wards(cityId).then((value) => {
       if (cancelled || !payload) return;
       payload.wards = value.wards;
-      finishOne();
+      finishOne("wards");
     }).catch(() => {
       missing.push("wards");
-      finishOne();
+      finishOne("wards");
     });
     void api.fires(cityId).then((value) => {
       if (cancelled || !payload) return;
       payload.fires = value.fires;
       payload.incidents = [...payload.incidents, ...(value.incidents ?? [])];
-      finishOne();
+      finishOne("fires");
     }).catch(() => {
       missing.push("fires");
-      finishOne();
+      finishOne("fires");
     });
 
     return () => {
       cancelled = true;
+      window.clearTimeout(debounce);
       map.off("zoomend", onZoomEnd);
-      map.off("moveend", refreshStations);
-      markers.current.forEach((marker) => marker.remove());
-      markers.current = [];
-      setCounts(EMPTY_COUNTS);
+      map.off("moveend", onMoveEnd);
+      // Leave markers in place for the next effect's draw() — clearing here caused a hitch + blank map.
     };
   }, [cityId, mapEpoch, lang, navigate, readingsStale]);
 
   return (
     <div className="stack map-page">
-      <PageHead kicker={city?.name ?? ""} title={t(lang, "map")}>
-        <button type="button" onClick={() => setRaster((layer) => (layer === "aqi" ? "pm25" : "aqi"))}>
-          {raster === "aqi" ? "US AQI" : "PM2.5"}
-        </button>
-        <button type="button" aria-pressed={windOn} onClick={() => setWindOn((on) => !on)}>
-          {windOn ? "Wind on" : "Wind off"}
-        </button>
-        <button type="button" onClick={() => setPitched((v) => !v)}>
-          {pitched ? t(lang, "flat") : t(lang, "buildings")}
-        </button>
-      </PageHead>
-      <p className="muted map-sources">{SOURCE_LINE}</p>
       <div className="map-frame">
+        <div className="map-toolbar" role="toolbar" aria-label={t(lang, "map")}>
+          <div className="row head-actions">
+            <button type="button" onClick={() => setRaster((layer) => (layer === "aqi" ? "pm25" : "aqi"))}>
+              {raster === "aqi" ? "US AQI" : "PM2.5"}
+            </button>
+            <button type="button" aria-pressed={windOn} onClick={() => setWindOn((on) => !on)}>
+              {windOn ? "Wind on" : "Wind off"}
+            </button>
+            <button type="button" aria-pressed={pitched} onClick={() => setPitched((v) => !v)}>
+              {pitched ? t(lang, "flat") : t(lang, "buildings")}
+            </button>
+          </div>
+        </div>
         <div id="map" ref={mapRef} />
+        <p className="muted map-sources">{SOURCE_LINE}</p>
         {mapNote ? (
           <div className="map-note" role="status">
             {mapNote === "loading" ? t(lang, "loading") : (

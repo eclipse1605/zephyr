@@ -24,18 +24,26 @@ cp .env.example .env
 bun run dev
 ```
 
-That starts the worker on :8081, the API on :8080, and the web app on :5173. Open http://127.0.0.1:5173. Demo fixtures load on worker startup.
+That starts the worker on :8081, the API on :8080, and the web app on :5173. Open http://localhost:5173 (use `localhost`, not `127.0.0.1`, so Firebase Google sign-in works). Demo fixtures load on worker startup.
 
 Copy `.env.example` to `.env.local` for overrides. Both files are gitignored. Prefer `ZEPHYR_DATA_DIR=/tmp/zephyr-data` when the repo lives on a slow disk. Set a non-empty `CRON_SECRET` so worker internal routes stay locked.
 
 ### Auth (local)
 
-With `ZEPHYR_DEV_AUTH=1`:
+Roles: `resident` | `operator`. Operators get the incident queue, copilot, pipeline, data-mode, tick, and API keys. `GET /auth/whoami` returns `{ email, role, operator, permissions }`.
 
-- Resident: `Authorization: Bearer demo:<email>`
-- Operator: `Authorization: Bearer operator:<email>` (email in `OPERATOR_EMAILS`)
+With `ZEPHYR_DEV_AUTH=1` (no Firebase client):
 
-With the Auth emulator (`FIREBASE_AUTH_EMULATOR_HOST`), use real emulator ID tokens instead.
+- Resident: `Authorization: Bearer demo:<email>` (never operator)
+- Operator: `Authorization: Bearer operator:<email>` and email in `OPERATOR_EMAILS` (default `operator@zephyr.local`)
+
+With Firebase / Auth emulator configured (`FIREBASE_*` or `VITE_FIREBASE_*` / `NEXT_PUBLIC_FIREBASE_*`):
+
+- Web sign-in: email/password or Google (open `http://localhost:5173`, not `127.0.0.1`)
+- Enable Google once in [Firebase Authentication → Sign-in method](https://console.firebase.google.com/project/cleanair-abcf0/authentication/providers), or run `bun scripts/enable-google-auth.ts` with `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET`
+- API verifies Firebase ID tokens (emulator lookup when `FIREBASE_AUTH_EMULATOR_HOST` is set)
+- Seed an emulator operator: `bun run bootstrap:operator`
+- `GET /api/v1/health` reports `googleSignIn` when the Google provider is configured
 
 ### Useful curls
 

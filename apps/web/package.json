@@ -10,10 +10,11 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "firebase": "^13.2.0",
     "h3-js": "^4.5.0",
     "maplibre-gl": "^5.24.0",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
     "react-router-dom": "^7.1.1"
   },
   "devDependencies": {

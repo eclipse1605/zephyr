@@ -3,18 +3,18 @@ import { useLang } from "./lang";
 import { PageHead } from "./uiBits";
 
 const LINK: Record<string, { privacy: string; terms: string; medical: string }> = {
-  en: { privacy: "Privacy", terms: "Terms", medical: "Not medical advice" },
-  hi: { privacy: "गोपनीयता", terms: "शर्तें", medical: "चिकित्सकीय सलाह नहीं" },
-  mr: { privacy: "गोपनीयता", terms: "अटी", medical: "वैद्यकीय सल्ला नाही" },
-  bn: { privacy: "গোপনীয়তা", terms: "শর্তাবলী", medical: "চিকিৎসা পরামর্শ নয়" },
-  ta: { privacy: "தனியுரிமை", terms: "விதிமுறைகள்", medical: "மருத்துவ ஆலோசனை அல்ல" },
-  kn: { privacy: "ಗೌಪ್ಯತೆ", terms: "ನಿಯಮಗಳು", medical: "ವೈದ್ಯಕೀಯ ಸಲಹೆ ಅಲ್ಲ" },
-  te: { privacy: "గోప్యత", terms: "నిబంధనలు", medical: "వైద్య సలహా కాదు" },
-  zh: { privacy: "隐私", terms: "条款", medical: "非医疗建议" },
-  ru: { privacy: "Конфиденциальность", terms: "Условия", medical: "Не медицинский совет" },
-  ar: { privacy: "الخصوصية", terms: "الشروط", medical: "ليست نصيحة طبية" },
-  id: { privacy: "Privasi", terms: "Ketentuan", medical: "Bukan nasihat medis" },
-  pt: { privacy: "Privacidade", terms: "Termos", medical: "Não é conselho médico" },
+  en: { privacy: "Privacy", terms: "Terms", medical: "Disclaimer" },
+  hi: { privacy: "गोपनीयता", terms: "शर्तें", medical: "अस्वीकरण" },
+  mr: { privacy: "गोपनीयता", terms: "अटी", medical: "अस्वीकरण" },
+  bn: { privacy: "গোপনীয়তা", terms: "শর্তাবলী", medical: "দাবিত্যাগ" },
+  ta: { privacy: "தனியுரிமை", terms: "விதிமுறைகள்", medical: "மறுப்பு" },
+  kn: { privacy: "ಗೌಪ್ಯತೆ", terms: "ನಿಯಮಗಳು", medical: "ಹಕ್ಕುತ್ಯಾಗ" },
+  te: { privacy: "గోప్యత", terms: "నిబంధనలు", medical: "నిరాకరణ" },
+  zh: { privacy: "隐私", terms: "条款", medical: "免责声明" },
+  ru: { privacy: "Конфиденциальность", terms: "Условия", medical: "Отказ от ответственности" },
+  ar: { privacy: "الخصوصية", terms: "الشروط", medical: "إخلاء المسؤولية" },
+  id: { privacy: "Privasi", terms: "Ketentuan", medical: "Penafian" },
+  pt: { privacy: "Privacidade", terms: "Termos", medical: "Aviso legal" },
 };
 
 const NOTE: Record<string, string> = {

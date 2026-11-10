@@ -74,6 +74,46 @@ export function mergeStations(readings: StationReading[], scale: AqiScale, now: 
   return kept;
 }
 
+export type MapStationLike = {
+  lat: number;
+  lng: number;
+  online?: boolean;
+  aqi?: number | null;
+  lastSeen?: string | null;
+  sourceFeed?: string | null;
+};
+
+/** Collapse already-stored map pins within 250 m (fixture + live duplicates). */
+export function collapseNearbyStations<T extends MapStationLike>(stations: T[]): T[] {
+  const kept: T[] = [];
+  for (const candidate of stations) {
+    const matchIdx = kept.findIndex(
+      (k) => haversineKm({ lat: k.lat, lng: k.lng }, { lat: candidate.lat, lng: candidate.lng }) <= STATION_DEDUPE_KM,
+    );
+    if (matchIdx < 0) {
+      kept.push(candidate);
+      continue;
+    }
+    kept[matchIdx] = preferMapStation(kept[matchIdx]!, candidate);
+  }
+  return kept;
+}
+
+function preferMapStation<T extends MapStationLike>(a: T, b: T): T {
+  const aLive = a.online !== false && a.aqi != null && Number.isFinite(a.aqi) && a.aqi > 0;
+  const bLive = b.online !== false && b.aqi != null && Number.isFinite(b.aqi) && b.aqi > 0;
+  if (aLive !== bLive) return aLive ? a : b;
+  const aTime = a.lastSeen ? Date.parse(a.lastSeen) : NaN;
+  const bTime = b.lastSeen ? Date.parse(b.lastSeen) : NaN;
+  const aOk = Number.isFinite(aTime);
+  const bOk = Number.isFinite(bTime);
+  if (aOk !== bOk) return aOk ? a : b;
+  if (aOk && aTime !== bTime) return bTime > aTime ? b : a;
+  const rank = (feed: string | null | undefined) =>
+    feed === "openaq" ? 0 : feed === "waqi" ? 1 : feed === "cpcb" ? 2 : 3;
+  return rank(a.sourceFeed) <= rank(b.sourceFeed) ? a : b;
+}
+
 function preferStation(a: MergedStation, b: MergedStation): MergedStation {
   if (a.online !== b.online) return a.online ? a : b;
   const aHas = a.aqi != null;

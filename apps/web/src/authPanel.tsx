@@ -127,23 +127,10 @@ export function AuthPanel({
             {signError ? <p className="error">{signError}</p> : null}
             <button type="submit" className="primary" disabled={busy}>{label}</button>
           </form>
-          <button
-            type="button"
-            className="quiet"
-            disabled={busy || !googleSignIn}
-            title={
-              googleSignIn
-                ? undefined
-                : "Enable Google under Firebase Authentication → Sign-in method"
-            }
-            onClick={() => void run(() => onFirebaseGoogle())}
-          >
-            {GOOGLE[lang] ?? GOOGLE.en}
-          </button>
-          {!googleSignIn ? (
-            <p className="error">
-              Google sign-in is off for this Firebase project. Enable Google under Authentication → Sign-in method.
-            </p>
+          {googleSignIn ? (
+            <button type="button" className="quiet" disabled={busy} onClick={() => void run(() => onFirebaseGoogle())}>
+              {GOOGLE[lang] ?? GOOGLE.en}
+            </button>
           ) : null}
         </>
       ) : null}

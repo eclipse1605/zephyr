@@ -15,7 +15,8 @@
     "maplibre-gl": "^5.24.0",
     "react": "19.2.0",
     "react-dom": "19.2.0",
-    "react-router-dom": "^7.1.1"
+    "react-router-dom": "^7.1.1",
+    "sonner": "^2.0.8"
   },
   "devDependencies": {
     "@types/react": "^19.0.2",

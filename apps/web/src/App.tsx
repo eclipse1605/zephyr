@@ -13,7 +13,7 @@ import {
 } from "./auth";
 import { DiaryPage, OperatorPage, PipelinePage, ReportPage, TrackPage, ZonePage } from "./flows";
 import { Home } from "./home";
-import { LANGUAGES, langForCity } from "./i18n";
+import { LANGUAGES } from "./i18n";
 import { LangContext } from "./lang";
 import { DisclaimerPage, PrivacyPage, TermsPage } from "./legal";
 import { MapPage } from "./mapPage";
@@ -151,7 +151,7 @@ export function App() {
     const saved = localStorage.getItem("zephyr.lang");
     return saved && LANGUAGES.some((language) => language.id === saved) ? saved : null;
   };
-  const [lang, setLangState] = useState(() => savedLang() ?? langForCity("delhi"));
+  const [lang, setLangState] = useState(() => savedLang() ?? "en");
   const setLang = (next: string) => {
     localStorage.setItem("zephyr.lang", next);
     setLangState(next);

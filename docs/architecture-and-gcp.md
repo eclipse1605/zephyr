@@ -49,9 +49,9 @@ The UI is a Vite + React single-page app. MapLibre draws maps from OpenFreeMap. 
 | `/zones/:h3` | Nearest station, zone brief, group advisory, 24 h forecast, upwind sources, subscribe, read-aloud                 |
 | `/diary`     | Home pin and hours in each AQI band for seven days. Sign-in is required                                           |
 
-Auth roles are `resident` and `operator`. Permissions are derived from role (`me.*`, `incidents.*`, `copilot`, `dlq.*`, `system.*`, `api_keys.create`). Operator status comes from a Firebase custom claim, a stored user role, or `OPERATOR_EMAILS`.
+Auth roles are `resident` and `operator`. Permissions are derived from role (`me.*`, `incidents.*`, `copilot`, `dlq.*`, `system.*`, `api_keys.create`). Operator status is only the stored account flag `users.role = operator`.
 
-Local sign-in when `ZEPHYR_DEV_AUTH=1`: resident tokens use `demo:<email>` (never elevated); operator tokens use `operator:<email>` and must be listed in `OPERATOR_EMAILS`. With Firebase client config, the web app signs in with email/password or Google and sends the Firebase ID token. The API verifies Firebase ID tokens against the project audience (Auth emulator lookup when `FIREBASE_AUTH_EMULATOR_HOST` is set). A last-resort Google `tokeninfo` check remains only when Firebase verification is unavailable; role still requires `OPERATOR_EMAILS` or a stored operator role. `GET /auth/whoami` returns `{ email, role, operator, permissions }`.
+Local sign-in when `ZEPHYR_DEV_AUTH=1` uses `demo:<email>` or `operator:<email>`. Neither prefix grants operator. With Firebase client config, the web app signs in with email/password or Google and sends the Firebase ID token. The API verifies Firebase ID tokens against the project audience (Auth emulator lookup when `FIREBASE_AUTH_EMULATOR_HOST` is set). Role is the stored account flag. `GET /auth/whoami` returns `{ email, role, operator, permissions }`.
 
 ### Operator UI
 
@@ -127,7 +127,7 @@ Promotion table. Flagged photos do not count. A null sensor or satellite is abse
 
 ### Server package (`packages/server`)
 
-File store (default local), Postgres plus object storage when `ZEPHYR_STORE=postgres`, or Firestore plus GCS when `ZEPHYR_STORE=gcp`. Cloud Run uses Postgres and the data bucket. Live ingest talks to OpenAQ, WAQI, CPCB, Open-Meteo wind, OpenStreetMap Overpass, Earth Engine, and Google Air Quality when keys exist. Gemini classifies photos, drafts work orders, writes zone briefs, and runs the operator copilot. If Gemini is missing or the call fails, a heuristic or offline answer is used. The code now calls `gemini-3.8-flash`.
+Postgres holds app state in per-collection tables (row revisions, scoped reads). Object storage holds photos, the wind grid, and model tiles: MinIO in dev, GCS (`ZEPHYR_BUCKET`) in production. There is no file store and no Firestore. Cloud Run uses Cloud SQL and the data bucket. Live ingest talks to OpenAQ, WAQI, CPCB, Open-Meteo wind, OpenStreetMap Overpass, Earth Engine, and Google Air Quality when keys exist. Gemini classifies photos, drafts work orders, writes zone briefs, and runs the operator copilot. If Gemini is missing or the call fails, a heuristic or offline answer is used. The code now calls `gemini-3.8-flash`.
 
 ---
 
@@ -196,7 +196,7 @@ Firestore is not created. Do not run Cloud SQL and a Firestore database together
 | `project_id` | required | Target project |
 | `region` | `asia-south1` | Cloud SQL, Cloud Run, buckets, BigQuery |
 | `name_prefix` | `zephyr` | Name stem |
-| `operator_emails` | empty | `OPERATOR_EMAILS` on the API |
+| operator accounts | none | `users.role = operator` in Postgres |
 | `api_image` / `worker_image` | hello image | Replace with Artifact Registry tags before a real apply |
 | `db_tier` | `db-f1-micro` | Cloud SQL tier |
 | `lb_domain` | empty | When set, Terraform adds a managed certificate and an HTTPS forwarding rule |

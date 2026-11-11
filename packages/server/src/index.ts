@@ -21,7 +21,6 @@ export {
   rolePermissions,
   hasPermission,
   resolveRole,
-  parseOperatorEmails,
   type Role,
   type Permission,
 } from "./rbac.js";
@@ -31,8 +30,8 @@ export {
   userHasPermission,
   type AuthStore,
 } from "./httpAuth.js";
-export { openStore } from "./gcpStore.js";
-export { cachedModelPoint, cachedModelTile, composeModelField, type RasterLayer } from "./modelRaster.js";
+export { openStore, type Store, StoreConflictError } from "./store.js";
+export { cachedModelPoint, cachedModelTile, composeModelField, renderWorldField, type RasterLayer } from "./modelRaster.js";
 export { readWindGrid, refreshWindGrid } from "./windGrid.js";
 export {
   enqueueIngestJobs,

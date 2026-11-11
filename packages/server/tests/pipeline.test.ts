@@ -1,10 +1,11 @@
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "bun:test";
 import type { Server } from "node:http";
 import type { Express } from "express";
-import { openStore, runTick, type StoredReport } from "../src/index.js";
+import { MemoryStore } from "../src/memoryStore.js";
+import { runTick, type StoredReport } from "../src/index.js";
+
+process.env.ZEPHYR_TEST_MEMORY = "1";
 
 const repoRoot = path.resolve(import.meta.dir, "../../..");
 
@@ -48,12 +49,9 @@ async function withServer(app: Express, run: (base: string) => Promise<void>) {
   }
 }
 
-describe("file store and demo tick", () => {
-  test("openStore keeps a report and a photo, and rejects a path escape", async () => {
-    const previous = process.env.ZEPHYR_STORE;
-    process.env.ZEPHYR_STORE = "file";
-    const dir = await mkdtemp(path.join(tmpdir(), "zephyr-store-"));
-    const store = await openStore(dir);
+describe("memory store and demo tick", () => {
+  test("the store keeps a report and a photo, and rejects a path escape", async () => {
+    const store = new MemoryStore();
     await store.update((db) => {
       db.reports["abcd1234"] = report("abcd1234");
     });
@@ -63,17 +61,12 @@ describe("file store and demo tick", () => {
     expect(saved.reports["abcd1234"]?.cityId).toBe("delhi");
     expect((await store.readPhoto("abcd1234")).equals(jpeg)).toBe(true);
     await expect(store.savePhoto("../pwned-by-id", jpeg)).rejects.toThrow("bad_id");
-    if (previous === undefined) delete process.env.ZEPHYR_STORE;
-    else process.env.ZEPHYR_STORE = previous;
   });
 
   test("a demo tick publishes a Delhi summary from fixtures", async () => {
     const previousPause = process.env.TICK_CITY_PAUSE_MS;
-    const previousStore = process.env.ZEPHYR_STORE;
     process.env.TICK_CITY_PAUSE_MS = "0";
-    process.env.ZEPHYR_STORE = "file";
-    const dir = await mkdtemp(path.join(tmpdir(), "zephyr-tick-"));
-    const store = await openStore(dir);
+    const store = new MemoryStore();
     await store.ensure();
     const result = await runTick({ store, fixturesRoot: path.join(repoRoot, "fixtures") });
     expect(result.ok).toBe(true);
@@ -82,16 +75,13 @@ describe("file store and demo tick", () => {
     expect(Object.values(db.stations).some((station) => station.cityId === "delhi" && station.online)).toBe(true);
     if (previousPause === undefined) delete process.env.TICK_CITY_PAUSE_MS;
     else process.env.TICK_CITY_PAUSE_MS = previousPause;
-    if (previousStore === undefined) delete process.env.ZEPHYR_STORE;
-    else process.env.ZEPHYR_STORE = previousStore;
   });
 });
 
 describe("report validation and worker auth", () => {
   test("POST /reports rejects an unknown city, bad coordinates, and a point outside the city", async () => {
     process.env.ZEPHYR_NO_LISTEN = "1";
-    process.env.ZEPHYR_STORE = "file";
-    process.env.ZEPHYR_DATA_DIR = await mkdtemp(path.join(tmpdir(), "zephyr-api-"));
+    process.env.ZEPHYR_TEST_MEMORY = "1";
     const { app } = await import("../../../apps/api/src/index.ts");
     await withServer(app, async (base) => {
       const post = (body: unknown) =>
@@ -109,8 +99,7 @@ describe("report validation and worker auth", () => {
 
   test("WhatsApp inbound stays off without Twilio", async () => {
     process.env.ZEPHYR_NO_LISTEN = "1";
-    process.env.ZEPHYR_STORE = "file";
-    process.env.ZEPHYR_DATA_DIR = await mkdtemp(path.join(tmpdir(), "zephyr-wa-"));
+    process.env.ZEPHYR_TEST_MEMORY = "1";
     const previous = {
       sid: process.env.TWILIO_ACCOUNT_SID,
       token: process.env.TWILIO_AUTH_TOKEN,
@@ -142,8 +131,7 @@ describe("report validation and worker auth", () => {
 
   test("worker tick is unauthorized without the cron secret", async () => {
     process.env.ZEPHYR_NO_LISTEN = "1";
-    process.env.ZEPHYR_STORE = "file";
-    process.env.ZEPHYR_DATA_DIR ??= await mkdtemp(path.join(tmpdir(), "zephyr-worker-"));
+    process.env.ZEPHYR_TEST_MEMORY = "1";
     const { app } = await import("../../../apps/worker/src/index.ts");
     const secret = process.env.CRON_SECRET;
     const emulator = process.env.PUBSUB_EMULATOR_HOST;

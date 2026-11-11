@@ -29,21 +29,25 @@
 }
 
 .hero-figure {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  grid-template-areas:
-    "band band"
-    "num copy";
-  align-items: end;
-  column-gap: 18px;
-  row-gap: 8px;
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  min-width: 0;
 }
 
-.hero-figure > div { display: contents; }
+.hero-aside {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+@media (max-width: 640px) {
+  .hero-figure { flex-direction: column; align-items: flex-start; }
+}
 
 .hero-band {
-  grid-area: band;
-  justify-self: start;
   margin: 0;
   padding: 3px 10px;
   border-radius: 999px;
@@ -63,7 +67,7 @@
 }
 
 .hero-aqi {
-  grid-area: num;
+  flex: none;
   margin: 0;
   font-family: var(--mono);
   font-size: clamp(3.4rem, 6vw, 4.6rem);
@@ -73,12 +77,14 @@
   font-variant-numeric: tabular-nums;
 }
 
+.hero .medical-note { margin: 0; max-width: 52ch; }
+
 .aqi-action {
-  grid-area: copy;
   margin: 0;
-  max-width: 42ch;
-  font-size: 1rem;
-  line-height: 1.45;
+  min-width: 0;
+  max-width: 52ch;
+  font-size: 1.05rem;
+  line-height: 1.4;
   color: var(--ink);
 }
 
@@ -98,9 +104,11 @@
 }
 
 .stat-strip li {
-  display: grid;
-  gap: 4px;
-  align-content: start;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px 16px;
   min-width: 0;
   padding: 16px 18px;
   border: 1px solid var(--line);
@@ -110,22 +118,28 @@
 }
 
 .stat-k {
-  color: var(--muted);
-  font-size: 0.75rem;
+  color: var(--ink);
+  font-size: 1.15rem;
   font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  letter-spacing: -0.02em;
+  text-transform: none;
 }
 
 .stat-strip strong {
+  margin-inline-start: auto;
   font-family: var(--mono);
-  font-size: 1.55rem;
+  font-size: 2rem;
   font-weight: 600;
   letter-spacing: -0.04em;
+  line-height: 1;
   font-variant-numeric: tabular-nums;
 }
 
-.stat-strip .muted { font-size: 0.85rem; }
+.stat-strip .muted,
+.stat-strip a {
+  flex: 1 0 100%;
+  font-size: 0.95rem;
+}
 
 .stat-strip a {
   justify-self: start;
@@ -136,6 +150,39 @@
 }
 
 .stat-strip a:hover { text-decoration: underline; }
+
+.spread-card h2 { margin: 0 0 12px; }
+.spread-track {
+  position: relative;
+  height: 10px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--fill-good), var(--fill-mod), var(--fill-poor), var(--fill-severe));
+}
+.spread-range {
+  position: absolute;
+  top: -3px;
+  height: 16px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 18%, transparent);
+}
+.spread-mark {
+  position: absolute;
+  top: -4px;
+  width: 3px;
+  height: 18px;
+  border-radius: 2px;
+  background: var(--ink);
+  transform: translateX(-1px);
+}
+.spread-labels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 8px;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
 
 .ward-board ol {
   display: grid;

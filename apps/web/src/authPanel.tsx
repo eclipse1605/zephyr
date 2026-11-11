@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { toast } from "sonner";
 import { t } from "./i18n";
 
 const OP_SIGN: Record<string, string> = {
@@ -92,7 +93,9 @@ export function AuthPanel({
     try {
       await task();
     } catch (err) {
-      setSignError(err instanceof Error && err.message ? err.message : label);
+      const message = err instanceof Error && err.message ? err.message : label;
+      setSignError(message);
+      toast.error(message);
     } finally {
       setBusy(false);
     }

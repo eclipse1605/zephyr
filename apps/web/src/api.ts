@@ -74,6 +74,8 @@ export type Station = {
   aqi: number | null;
   online?: boolean;
   sourceFeed?: string;
+  cityId?: string;
+  lastSeen?: string;
   h3?: string;
   incidentId?: string;
   incident?: MapIncident | null;
@@ -99,9 +101,23 @@ export type UpwindSource = {
   alignment?: number;
 };
 
+export type ModelPoint = {
+  aqi?: number | null;
+  pm25?: number | null;
+  pm10?: number | null;
+  no2?: number | null;
+  ozone?: number | null;
+  so2?: number | null;
+  co?: number | null;
+  attribution?: string;
+  error?: string;
+};
+
 export type ZoneView = {
   h3: string;
   cityId?: string;
+  center?: { lat: number; lng: number };
+  openReports?: number;
   nearestStation?: { id?: string; name?: string; aqi?: number | null; sourceFeed?: string } | null;
   distanceKm?: number | null;
   advisory?: {

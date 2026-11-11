@@ -10,12 +10,27 @@ import {
   haversineKm,
   openClosureWindow,
 } from "@zephyr/domain";
-import { FileStore, newId, sha256 } from "./store.js";
+import { newId, sha256, StoreConflictError, type Store } from "./store.js";
 import { classifyPhoto, countsAsEvidence, draftWorkOrder } from "./gemini.js";
 import { refreshCitySurface } from "./surface.js";
 import { isRepeatHotspot } from "@zephyr/domain";
 
-export async function processReportMessage(store: FileStore, reportId: string) {
+/**
+ * Classification can take many seconds, so two reports in the same city often finish together
+ * and the second write loses the row-revision race. Re-run from a fresh read instead of
+ * leaving the report stuck in `received`.
+ */
+export async function processReportMessage(store: Store, reportId: string) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await processReportOnce(store, reportId);
+    } catch (err) {
+      if (!(err instanceof StoreConflictError) || attempt >= 4) throw err;
+    }
+  }
+}
+
+async function processReportOnce(store: Store, reportId: string) {
   const db = await store.read();
   const report = db.reports[reportId];
   if (!report) throw new Error(`unknown report ${reportId}`);
@@ -152,7 +167,7 @@ export async function processReportMessage(store: FileStore, reportId: string) {
 }
 
 export async function resolveIncident(
-  store: FileStore,
+  store: Store,
   incidentId: string,
   actor: string,
   action: "dispatch" | "resolve" | "false_positive",

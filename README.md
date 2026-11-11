@@ -21,12 +21,13 @@ Live ingest is scoped to the **twelve monitored cities**. The map may show world
 ```bash
 bun install
 cp .env.example .env
+docker compose up -d postgres minio
 bun run dev
 ```
 
-That starts the worker on :8081, the API on :8080, and the web app on :5173. Open http://localhost:5173 (use `localhost`, not `127.0.0.1`, so Firebase Google sign-in works). Demo fixtures load on worker startup.
+That starts Postgres and MinIO, then the worker on :8081, the API on :8080, and the web app on :5173. Open http://localhost:5173 (use `localhost`, not `127.0.0.1`, so Firebase Google sign-in works). Demo fixtures load on worker startup. App state is in Postgres. Photos, the wind grid, and model tiles are objects in MinIO (`S3_*` in `.env`). Production uses the same store against Cloud SQL and a GCS bucket (`ZEPHYR_BUCKET`, no `S3_*`).
 
-Copy `.env.example` to `.env.local` for overrides. Both files are gitignored. Prefer `ZEPHYR_DATA_DIR=/tmp/zephyr-data` when the repo lives on a slow disk. Set a non-empty `CRON_SECRET` so worker internal routes stay locked.
+Copy `.env.example` to `.env.local` for overrides. Both `.env` and `.env.local` are gitignored. `.env.local` is loaded first and wins. Set a non-empty `CRON_SECRET` so worker internal routes stay locked.
 
 ### Auth (local)
 
@@ -35,7 +36,7 @@ Roles: `resident` | `operator`. Operators get the incident queue, copilot, pipel
 With `ZEPHYR_DEV_AUTH=1` (no Firebase client):
 
 - Resident: `Authorization: Bearer demo:<email>` (never operator)
-- Operator: `Authorization: Bearer operator:<email>` and email in `OPERATOR_EMAILS` (default `operator@zephyr.local`)
+- Operator: the account row in the database has `role: "operator"`. A dev token does not grant that.
 
 With Firebase / Auth emulator configured (`FIREBASE_*` or `VITE_FIREBASE_*` / `NEXT_PUBLIC_FIREBASE_*`):
 
@@ -60,7 +61,7 @@ curl -H "Authorization: Bearer $CRON_SECRET" -X POST localhost:8081/internal/job
 docker compose up --build
 ```
 
-Web on :5173, API :8080, worker :8081, Postgres :5432, MinIO-compatible object storage, Auth emulator :9099. Services use `ZEPHYR_STORE=postgres`.
+Web on :5173, API :8080, worker :8081, Postgres :5432, MinIO :9000, Auth emulator :9099. Services use `DATABASE_URL` and `S3_*`.
 
 ## Feeds
 
@@ -74,7 +75,7 @@ WhatsApp inbound stays off until Twilio and `WHATSAPP_CLOSURE_SECRET` are set. T
 2. Build and push `api` / `worker` images to Artifact Registry
 3. `cd infra/terraform && terraform init && terraform apply`
 4. Upload `fixtures/` to the data bucket under `fixtures/` and `geo/`
-5. Add Secret Manager versions for any third-party keys you mount; set `OPERATOR_EMAILS`
+5. Add Secret Manager versions for any third-party keys you mount. Mark operators by setting `users.role` to `operator` in the database.
 
 Do not apply until images exist and keyed secrets have versions. HTTP contract is path-versioned under `/api/v1`.
 

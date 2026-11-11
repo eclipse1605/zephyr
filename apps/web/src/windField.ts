@@ -8,46 +8,52 @@ export type WindHandle = {
   destroy: () => void;
 };
 
+/** Geographic wind field, bilinear with wrap-around in longitude. */
 type Field = {
   lats: number[];
   lngs: number[];
-  u: Float64Array;
-  v: Float64Array;
+  u: Float32Array;
+  v: Float32Array;
 };
 
-type Particle = {
-  lng: number;
-  lat: number;
-  age: number;
-  life: number;
-  trailX: Float64Array;
-  trailY: Float64Array;
-  trailLen: number;
-  trailAt: number;
+/**
+ * Screen-space flow grid. Rebuilt after each pan/zoom settles, so the per-frame loop
+ * never touches map.project/unproject: particles only read vx/vy from this grid.
+ * vx/vy = unit screen direction * wind speed (m/s). ok = node is on the globe/map.
+ */
+type Flow = {
+  cell: number;
+  cols: number;
+  rows: number;
+  vx: Float32Array;
+  vy: Float32Array;
+  ok: Uint8Array;
 };
 
-const MAX_SPEED_MS = 22;
-const STEP_SCALE = 95;
-const TRAIL = 6;
-const COUNT = 96;
-/** Draw at half CSS resolution — particles read fine and cost much less. */
-const PIXEL_SCALE = 0.5;
+type Particle = { x: number; y: number; px: number; py: number; age: number; life: number };
+
+const MAX_SPEED_MS = 28;
+const MIN_SPEED_MS = 3.4;
+const FLOW_CELL = 14;
+const OPACITY = 0.95;
 
 function wrapLng(lng: number): number {
-  return ((lng + 180) % 360 + 360) % 360 - 180;
+  return ((((lng + 180) % 360) + 360) % 360) - 180;
 }
 
 function buildField(grid: WindGrid): Field | null {
   if (!grid.cells.length) return null;
   const lats = [...new Set(grid.cells.map((cell) => cell.lat))].sort((a, b) => a - b);
-  const lngs = [...new Set(grid.cells.map((cell) => cell.lng))].sort((a, b) => a - b);
-  if (lats.length < 2 || lngs.length < 2) return null;
-  const u = new Float64Array(lats.length * lngs.length);
-  const v = new Float64Array(lats.length * lngs.length);
-  const index = new Map(grid.cells.map((cell) => [`${cell.lat},${cell.lng}`, cell]));
+  const baseLngs = [...new Set(grid.cells.map((cell) => wrapLng(cell.lng)))].sort((a, b) => a - b);
+  if (lats.length < 2 || baseLngs.length < 2) return null;
+  // Extra wrap column so interpolation across the antimeridian is seamless.
+  const lngs = [...baseLngs, baseLngs[0] + 360];
+  const u = new Float32Array(lats.length * lngs.length);
+  const v = new Float32Array(lats.length * lngs.length);
+  const index = new Map(grid.cells.map((cell) => [`${cell.lat},${wrapLng(cell.lng)}`, cell]));
   for (let row = 0; row < lats.length; row++) {
     for (let col = 0; col < lngs.length; col++) {
-      const cell = index.get(`${lats[row]},${lngs[col]}`);
+      const cell = index.get(`${lats[row]},${wrapLng(lngs[col])}`);
       const i = row * lngs.length + col;
       u[i] = cell?.u ?? 0;
       v[i] = cell?.v ?? 0;
@@ -57,100 +63,52 @@ function buildField(grid: WindGrid): Field | null {
 }
 
 function bracket(values: number[], value: number): [number, number, number] {
+  const last = values.length - 1;
   if (value <= values[0]) return [0, 0, 0];
-  if (value >= values[values.length - 1]) return [values.length - 1, values.length - 1, 0];
-  let hi = 1;
-  while (hi < values.length && values[hi] < value) hi += 1;
-  const lo = hi - 1;
-  const span = values[hi] - values[lo] || 1;
-  return [lo, hi, (value - values[lo]) / span];
+  if (value >= values[last]) return [last, last, 0];
+  let lo = 0;
+  let hi = last;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (values[mid] <= value) lo = mid;
+    else hi = mid;
+  }
+  return [lo, hi, (value - values[lo]) / (values[hi] - values[lo] || 1)];
 }
 
-function sampleField(field: Field, lat: number, lng: number): { u: number; v: number } {
-  const wrapped = wrapLng(lng);
-  const [lat0, lat1, ty] = bracket(field.lats, lat);
-  const [lng0, lng1, tx] = bracket(field.lngs, wrapped);
+const smooth = (t: number) => t * t * (3 - 2 * t);
+
+function sampleField(field: Field, lat: number, lng: number, out: { u: number; v: number }) {
+  let x = wrapLng(lng);
+  if (x < field.lngs[0]) x += 360;
+  const [r0, r1, ty0] = bracket(field.lats, lat);
+  const [c0, c1, tx0] = bracket(field.lngs, x);
+  const tx = smooth(tx0);
+  const ty = smooth(ty0);
   const cols = field.lngs.length;
-  const i00 = lat0 * cols + lng0;
-  const i01 = lat0 * cols + lng1;
-  const i10 = lat1 * cols + lng0;
-  const i11 = lat1 * cols + lng1;
-  const u0 = field.u[i00] * (1 - tx) + field.u[i01] * tx;
-  const u1 = field.u[i10] * (1 - tx) + field.u[i11] * tx;
-  const v0 = field.v[i00] * (1 - tx) + field.v[i01] * tx;
-  const v1 = field.v[i10] * (1 - tx) + field.v[i11] * tx;
-  return { u: u0 * (1 - ty) + u1 * ty, v: v0 * (1 - ty) + v1 * ty };
+  const a = r0 * cols + c0;
+  const b = r0 * cols + c1;
+  const c = r1 * cols + c0;
+  const d = r1 * cols + c1;
+  const u0 = field.u[a] * (1 - tx) + field.u[b] * tx;
+  const u1 = field.u[c] * (1 - tx) + field.u[d] * tx;
+  const v0 = field.v[a] * (1 - tx) + field.v[b] * tx;
+  const v1 = field.v[c] * (1 - tx) + field.v[d] * tx;
+  out.u = u0 * (1 - ty) + u1 * ty;
+  out.v = v0 * (1 - ty) + v1 * ty;
 }
 
-function nearestCell(grid: WindGrid, lat: number, lng: number): { u: number; v: number } {
-  const wrapped = wrapLng(lng);
-  let best = grid.cells[0];
-  let bestD = Infinity;
-  for (const cell of grid.cells) {
-    const dLat = cell.lat - lat;
-    let dLng = cell.lng - wrapped;
-    if (dLng > 180) dLng -= 360;
-    if (dLng < -180) dLng += 360;
-    const d = dLat * dLat + dLng * dLng;
-    if (d < bestD) {
-      best = cell;
-      bestD = d;
-    }
-  }
-  return { u: best?.u ?? 0, v: best?.v ?? 0 };
+/**
+ * Pixels advanced per frame (at 60fps) per m/s of wind. Grows gently with zoom so streaks
+ * stay readable and calm on the globe without crawling when zoomed in on a city.
+ */
+function pixelsPerMs(zoom: number): number {
+  return Math.min(0.12, 0.09 * Math.pow(2, 0.28 * (zoom - 2)));
 }
 
-function sampleWind(field: Field | null, grid: WindGrid, lat: number, lng: number): { u: number; v: number } {
-  return field ? sampleField(field, lat, lng) : nearestCell(grid, lat, lng);
-}
-
-function clampWind(u: number, v: number): { u: number; v: number; speed: number } {
-  const speed = Math.hypot(u, v);
-  if (speed <= MAX_SPEED_MS || speed === 0) return { u, v, speed };
-  const scale = MAX_SPEED_MS / speed;
-  return { u: u * scale, v: v * scale, speed: MAX_SPEED_MS };
-}
-
-function spawnInView(map: MapLibreMap): { lng: number; lat: number } {
-  const bounds = map.getBounds();
-  const west = bounds.getWest();
-  const east = bounds.getEast();
-  const south = bounds.getSouth();
-  const north = bounds.getNorth();
-  const lat = south + Math.random() * Math.max(0.01, north - south);
-  let lng: number;
-  if (east >= west) {
-    lng = west + Math.random() * Math.max(0.01, east - west);
-  } else {
-    const span = 360 - west + east;
-    lng = wrapLng(west + Math.random() * span);
-  }
-  return { lng, lat: Math.max(-75, Math.min(75, lat)) };
-}
-
-function makeParticle(map: MapLibreMap): Particle {
-  const at = spawnInView(map);
-  return {
-    ...at,
-    age: Math.random() * 40,
-    life: 50 + Math.random() * 40,
-    trailX: new Float64Array(TRAIL),
-    trailY: new Float64Array(TRAIL),
-    trailLen: 0,
-    trailAt: 0,
-  };
-}
-
-function clearTrail(part: Particle) {
-  part.trailLen = 0;
-  part.trailAt = 0;
-}
-
-function pushTrail(part: Particle, x: number, y: number) {
-  part.trailX[part.trailAt] = x;
-  part.trailY[part.trailAt] = y;
-  part.trailAt = (part.trailAt + 1) % TRAIL;
-  if (part.trailLen < TRAIL) part.trailLen += 1;
+/** Frames a streak stays visible. Longer streaks on the globe, snappier up close. */
+function fadePerFrame(zoom: number): number {
+  return Math.max(0.03, Math.min(0.045, 0.032 + 0.003 * (zoom - 2)));
 }
 
 export function attachWind(map: MapLibreMap, grid: WindGrid): WindHandle {
@@ -162,113 +120,243 @@ export function attachWind(map: MapLibreMap, grid: WindGrid): WindHandle {
   canvas.style.height = "100%";
   canvas.style.pointerEvents = "none";
   canvas.style.zIndex = "1";
-  const parent = map.getCanvasContainer();
-  parent.appendChild(canvas);
+  canvas.style.opacity = "0";
+  map.getCanvasContainer().appendChild(canvas);
   const ctx = canvas.getContext("2d", { alpha: true });
   const field = buildField(grid);
 
-  const parts: Particle[] = Array.from({ length: COUNT }, () => makeParticle(map));
-
+  let flow: Flow | null = null;
+  let parts: Particle[] = [];
   let enabled = true;
   let moving = false;
   let frame = 0;
+  let last = 0;
   let cssW = 1;
   let cssH = 1;
+  const tmp = { u: 0, v: 0 };
+
+  const targetCount = () => {
+    const density = map.getZoom() > 7 ? 0.6 : 1;
+    return Math.max(450, Math.min(4200, Math.round(((cssW * cssH) / 380) * density)));
+  };
+
+  function buildFlow() {
+    if (!field) {
+      flow = null;
+      return;
+    }
+    const cell = FLOW_CELL;
+    const cols = Math.ceil(cssW / cell) + 2;
+    const rows = Math.ceil(cssH / cell) + 2;
+    const next: Flow = {
+      cell,
+      cols,
+      rows,
+      vx: new Float32Array(cols * rows),
+      vy: new Float32Array(cols * rows),
+      ok: new Uint8Array(cols * rows),
+    };
+    const PROBE_M = 20_000;
+    const swirl = Math.max(0, Math.min(1, (map.getZoom() - 4) / 4)) * 0.5;
+    const center = map.getCenter();
+    const phase1 = center.lng * 0.9;
+    const phase2 = center.lat * 1.3;
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const x = c * cell;
+        const y = r * cell;
+        const i = r * cols + c;
+        let geo;
+        try {
+          geo = map.unproject([x, y]);
+        } catch {
+          continue;
+        }
+        if (!Number.isFinite(geo.lat) || !Number.isFinite(geo.lng) || Math.abs(geo.lat) > 84) continue;
+        const back = map.project(geo);
+        // Off-globe pixels unproject to the horizon; the round-trip gives them away.
+        if (Math.abs(back.x - x) > 1.5 || Math.abs(back.y - y) > 1.5) continue;
+        sampleField(field, geo.lat, geo.lng, tmp);
+        let speed = Math.hypot(tmp.u, tmp.v);
+        if (speed > MAX_SPEED_MS) {
+          tmp.u *= MAX_SPEED_MS / speed;
+          tmp.v *= MAX_SPEED_MS / speed;
+          speed = MAX_SPEED_MS;
+        }
+        const mLat = 111_320;
+        const mLng = Math.max(2_000, mLat * Math.cos((geo.lat * Math.PI) / 180));
+        const dir = speed > 1e-6 ? 1 / speed : 0;
+        const probe = map.project([
+          wrapLng(geo.lng + (tmp.u * dir * PROBE_M) / mLng),
+          Math.max(-85, Math.min(85, geo.lat + (tmp.v * dir * PROBE_M) / mLat)),
+        ]);
+        let dx = probe.x - x;
+        let dy = probe.y - y;
+        const len = Math.hypot(dx, dy);
+        if (len < 1e-6) {
+          // Probe collapsed (e.g. exactly at a pole): no direction, stay calm.
+          continue;
+        }
+        dx /= len;
+        dy /= len;
+        if (swirl > 0) {
+          // Zoomed in, the 10° source grid is locally uniform. A slow, coherent swirl keeps the
+          // streamlines organic (as in IQAir Earth) without changing the overall direction.
+          const n =
+            Math.sin(x * 0.011 + Math.sin(y * 0.007) * 2 + phase1) *
+            Math.cos(y * 0.013 + Math.sin(x * 0.009) * 2 + phase2);
+          const a = n * swirl;
+          const ca = Math.cos(a);
+          const sa = Math.sin(a);
+          const rx = dx * ca - dy * sa;
+          dy = dx * sa + dy * ca;
+          dx = rx;
+        }
+        const shown = Math.max(speed, MIN_SPEED_MS);
+        next.vx[i] = dx * shown;
+        next.vy[i] = dy * shown;
+        next.ok[i] = 1;
+      }
+    }
+    flow = next;
+  }
+
+  /** Bilinear sample of the flow grid. Returns false if the point is off the map. */
+  function sampleFlow(x: number, y: number, out: { u: number; v: number }): boolean {
+    const f = flow;
+    if (!f) return false;
+    const fx = x / f.cell;
+    const fy = y / f.cell;
+    const c = Math.floor(fx);
+    const r = Math.floor(fy);
+    if (c < 0 || r < 0 || c >= f.cols - 1 || r >= f.rows - 1) return false;
+    const tx = fx - c;
+    const ty = fy - r;
+    const i00 = r * f.cols + c;
+    const i10 = i00 + 1;
+    const i01 = i00 + f.cols;
+    const i11 = i01 + 1;
+    if (!f.ok[i00] || !f.ok[i10] || !f.ok[i01] || !f.ok[i11]) return false;
+    const w00 = (1 - tx) * (1 - ty);
+    const w10 = tx * (1 - ty);
+    const w01 = (1 - tx) * ty;
+    const w11 = tx * ty;
+    out.u = f.vx[i00] * w00 + f.vx[i10] * w10 + f.vx[i01] * w01 + f.vx[i11] * w11;
+    out.v = f.vy[i00] * w00 + f.vy[i10] * w10 + f.vy[i01] * w01 + f.vy[i11] * w11;
+    return true;
+  }
+
+  function place(part: Particle, spread: boolean) {
+    for (let attempt = 0; attempt < 12; attempt++) {
+      const x = Math.random() * cssW;
+      const y = Math.random() * cssH;
+      if (sampleFlow(x, y, tmp)) {
+        part.x = part.px = x;
+        part.y = part.py = y;
+        part.life = 55 + Math.random() * 90;
+        part.age = spread ? Math.random() * part.life : 0;
+        return;
+      }
+    }
+    // No valid spot found (e.g. mostly off-globe); park it until the next respawn.
+    part.x = part.px = -100;
+    part.y = part.py = -100;
+    part.age = 0;
+    part.life = 4;
+  }
+
+  function reseed() {
+    const want = targetCount();
+    while (parts.length < want) parts.push({ x: 0, y: 0, px: 0, py: 0, age: 0, life: 1 });
+    parts.length = want;
+    for (const part of parts) place(part, true);
+  }
+
+  function clearCanvas() {
+    if (ctx) {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalCompositeOperation = "source-over";
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+  }
 
   const hideForMove = () => {
     moving = true;
+    clearCanvas();
     canvas.style.opacity = "0";
   };
+
   const showAfterMove = () => {
+    buildFlow();
+    reseed();
+    clearCanvas();
     moving = false;
-    if (!enabled) return;
-    for (const part of parts) {
-      const point = map.project([part.lng, part.lat]);
-      if (point.x < -40 || point.y < -40 || point.x > cssW + 40 || point.y > cssH + 40) {
-        respawn(part);
-      } else {
-        clearTrail(part);
-      }
-    }
-    canvas.style.opacity = "0.9";
+    if (enabled) canvas.style.opacity = String(OPACITY);
   };
 
   const resize = () => {
     const mapCanvas = map.getCanvas();
     cssW = mapCanvas.clientWidth || Math.floor(mapCanvas.width / (window.devicePixelRatio || 1));
     cssH = mapCanvas.clientHeight || Math.floor(mapCanvas.height / (window.devicePixelRatio || 1));
-    canvas.width = Math.max(1, Math.floor(cssW * PIXEL_SCALE));
-    canvas.height = Math.max(1, Math.floor(cssH * PIXEL_SCALE));
-    if (ctx) {
-      ctx.setTransform(PIXEL_SCALE, 0, 0, PIXEL_SCALE, 0, 0);
-    }
-  };
-
-  const respawn = (part: Particle) => {
-    const at = spawnInView(map);
-    part.lng = at.lng;
-    part.lat = at.lat;
-    part.age = 0;
-    part.life = 50 + Math.random() * 45;
-    clearTrail(part);
+    canvas.width = Math.max(1, Math.floor(cssW));
+    canvas.height = Math.max(1, Math.floor(cssH));
+    if (!moving) showAfterMove();
   };
 
   map.on("movestart", hideForMove);
   map.on("zoomstart", hideForMove);
   map.on("moveend", showAfterMove);
   map.on("zoomend", showAfterMove);
-  resize();
-  canvas.style.opacity = "0.9";
+  map.on("resize", resize);
   const observer = new ResizeObserver(resize);
   observer.observe(map.getContainer());
-  map.on("resize", resize);
+  resize();
 
-  const step = () => {
+  const step = (now: number) => {
     frame = requestAnimationFrame(step);
-    if (!ctx || !enabled || moving) return;
-    ctx.clearRect(0, 0, cssW, cssH);
+    if (!ctx || !enabled || moving || !flow) {
+      last = now;
+      return;
+    }
+    const dt = Math.min(2.5, Math.max(0.4, (now - (last || now)) / 16.667));
+    last = now;
+    const zoom = map.getZoom();
+    const scale = pixelsPerMs(zoom) * dt;
+
+    // Fade what is already on the canvas: this is what makes the trails.
+    ctx.globalCompositeOperation = "destination-out";
+    ctx.fillStyle = `rgba(0, 0, 0, ${Math.min(0.3, fadePerFrame(zoom) * dt)})`;
+    ctx.fillRect(0, 0, cssW, cssH);
+    ctx.globalCompositeOperation = "source-over";
     ctx.lineCap = "round";
-    ctx.lineJoin = "round";
+    ctx.lineWidth = zoom < 5 ? 1 : 1.25;
 
-    for (let i = 0; i < parts.length; i++) {
-      const part = parts[i];
-      const raw = sampleWind(field, grid, part.lat, part.lng);
-      const wind = clampWind(raw.u, raw.v);
-      const mLat = 111_320;
-      const mLng = Math.max(1_000, mLat * Math.cos((part.lat * Math.PI) / 180));
-      part.lat += (wind.v / mLat) * STEP_SCALE;
-      part.lng = wrapLng(part.lng + (wind.u / mLng) * STEP_SCALE);
-      part.age += 1;
-
-      const point = map.project([part.lng, part.lat]);
-      if (
-        part.age > part.life ||
-        part.lat > 78 ||
-        part.lat < -78 ||
-        point.x < -60 ||
-        point.y < -60 ||
-        point.x > cssW + 60 ||
-        point.y > cssH + 60
-      ) {
-        respawn(part);
+    // Bucket by speed so each bucket is one stroke.
+    const buckets: Path2D[] = [new Path2D(), new Path2D(), new Path2D(), new Path2D()];
+    const dim = zoom > 8 ? 0.65 : 1;
+    const alphas = [0.42, 0.56, 0.72, 0.9].map((a) => a * dim);
+    for (const part of parts) {
+      part.px = part.x;
+      part.py = part.y;
+      if (!sampleFlow(part.x, part.y, tmp)) {
+        place(part, false);
         continue;
       }
-
-      pushTrail(part, point.x, point.y);
-      if (part.trailLen < 2) continue;
-
-      const fade = 1 - part.age / part.life;
-      const alpha = Math.max(0.14, Math.min(0.55, 0.16 + wind.speed / 32)) * fade;
-      ctx.strokeStyle = `rgba(210, 230, 255, ${alpha})`;
-      ctx.lineWidth = 1.1 + Math.min(1.1, wind.speed / 24);
-      ctx.beginPath();
-      const start = (part.trailAt - part.trailLen + TRAIL) % TRAIL;
-      ctx.moveTo(part.trailX[start], part.trailY[start]);
-      for (let t = 1; t < part.trailLen; t++) {
-        const idx = (start + t) % TRAIL;
-        ctx.lineTo(part.trailX[idx], part.trailY[idx]);
+      const speed = Math.hypot(tmp.u, tmp.v);
+      part.x += tmp.u * scale;
+      part.y += tmp.v * scale;
+      part.age += dt;
+      if (part.age > part.life) {
+        place(part, false);
+        continue;
       }
-      ctx.stroke();
+      const bucket = speed < 4 ? 0 : speed < 8 ? 1 : speed < 14 ? 2 : 3;
+      buckets[bucket].moveTo(part.px, part.py);
+      buckets[bucket].lineTo(part.x, part.y);
+    }
+    for (let b = 0; b < buckets.length; b++) {
+      ctx.strokeStyle = `rgba(236, 244, 255, ${alphas[b]})`;
+      ctx.stroke(buckets[b]);
     }
   };
 
@@ -279,9 +367,10 @@ export function attachWind(map: MapLibreMap, grid: WindGrid): WindHandle {
       enabled = on;
       if (!on) {
         canvas.style.opacity = "0";
-        if (ctx) ctx.clearRect(0, 0, cssW, cssH);
+        clearCanvas();
       } else if (!moving) {
-        canvas.style.opacity = "0.9";
+        clearCanvas();
+        canvas.style.opacity = String(OPACITY);
       }
     },
     destroy() {

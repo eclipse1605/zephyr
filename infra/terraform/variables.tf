@@ -13,12 +13,6 @@ variable "name_prefix" {
   default = "zephyr"
 }
 
-variable "operator_emails" {
-  type        = string
-  default     = ""
-  description = "Comma-separated operator allowlist"
-}
-
 variable "api_image" {
   type        = string
   description = "Container image for Cloud Run api"

@@ -24,6 +24,8 @@ import {
   verifyTwilioSignature,
   h3ToLatLng,
   collapseNearbyStations,
+  enrichStation,
+  median,
 } from "@zephyr/domain";
 import {
   hashIp,
@@ -57,6 +59,7 @@ import {
   cachedModelPoint,
   cachedModelTile,
   composeModelField,
+  renderWorldField,
   readWindGrid,
   enqueueIngestJobs,
   replayIngestJob,
@@ -64,14 +67,45 @@ import {
   type SessionUser,
 } from "@zephyr/server";
 
+function freshAqi<T extends {
+  id: string;
+  name: string;
+  cityId: string;
+  lat: number;
+  lng: number;
+  sourceFeed: string;
+  lastSeen: string;
+  pollutants: Record<string, number | null | undefined>;
+  aqi: number | null;
+  dominantPollutant?: string | null;
+  band?: string | null;
+}>(station: T): T {
+  const scale = getCity(station.cityId)?.aqiScale ?? "india";
+  const next = enrichStation(
+    {
+      id: station.id,
+      name: station.name,
+      cityId: station.cityId,
+      lat: station.lat,
+      lng: station.lng,
+      sourceFeed: station.sourceFeed as "openaq",
+      lastSeen: station.lastSeen,
+      pollutants: station.pollutants,
+      sourceAqi: station.aqi,
+      sourceDominant: station.dominantPollutant ?? null,
+    },
+    scale,
+  );
+  return { ...station, aqi: next.aqi, dominantPollutant: next.dominantPollutant, band: next.band };
+}
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = process.env.ZEPHYR_ROOT ?? path.resolve(__dirname, "../../..");
-const DATA = resolveFromRoot(ROOT, process.env.ZEPHYR_DATA_DIR, path.join(ROOT, ".data"));
 const FIXTURES = resolveFromRoot(ROOT, process.env.ZEPHYR_FIXTURES, path.join(ROOT, "fixtures"));
 const WORKER_URL = process.env.WORKER_URL ?? "http://127.0.0.1:8081";
 const PORT = resolveListenPort("api");
 
-const store = await openStore(DATA);
+const store = await openStore();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 export const app = express();
 app.use(cors());
@@ -159,14 +193,14 @@ v1.get("/model/tiles/:layer/:z/:x/:y", async (req, res) => {
   const x = Number(param(req.params.x));
   const y = Number(param(req.params.y));
   try {
-    const tile = await cachedModelTile({ layer, z, x, y, cacheDir: path.join(DATA, "model-tiles") });
+    const tile = await cachedModelTile({ layer, z, x, y, objects: store.objects });
     // Blank tiles must not stick in the browser — they punch holes in the field.
     res.set(
       "Cache-Control",
       tile.blank ? "public, max-age=5" : tile.stale ? "public, max-age=60" : "public, max-age=3600",
     );
     res.set("X-Zephyr-Cache", tile.stale ? "stale" : tile.cached ? "hit" : "miss");
-    if (tile.blank) res.set("X-Zephyr-Blank", "1");
+    if (tile.blank) return res.status(404).end();
     res.type("png").send(tile.png);
   } catch (err) {
     const message = err instanceof Error ? err.message : "tile";
@@ -185,15 +219,18 @@ v1.get("/model/field/:layer", async (req, res) => {
   const y0 = Number(req.query.y0 ?? 0);
   const y1 = Number(req.query.y1 ?? 3);
   try {
-    const field = await composeModelField({
-      layer,
-      z,
-      x0,
-      x1,
-      y0,
-      y1,
-      cacheDir: path.join(DATA, "model-tiles"),
-    });
+    const world = z === 2 && x0 === 0 && x1 === 3 && y0 === 0 && y1 === 3;
+    const field = world
+      ? { png: await renderWorldField({ layer, objects: store.objects }), west: -180, east: 180, north: 85, south: -85 }
+      : await composeModelField({
+          layer,
+          z,
+          x0,
+          x1,
+          y0,
+          y1,
+          objects: store.objects,
+        });
     res.set("Cache-Control", "public, max-age=300");
     res.set("X-Zephyr-Field-West", String(field.west));
     res.set("X-Zephyr-Field-East", String(field.east));
@@ -207,7 +244,7 @@ v1.get("/model/field/:layer", async (req, res) => {
 });
 
 v1.get("/model/wind", async (_req, res) => {
-  const grid = await readWindGrid(DATA, path.join(FIXTURES, "wind", "sample.json"));
+  const grid = await readWindGrid(store.objects, path.join(FIXTURES, "wind", "sample.json"));
   res.json(grid);
 });
 
@@ -215,7 +252,7 @@ v1.get("/model/point", async (req, res) => {
   const lat = Number(req.query.lat);
   const lng = Number(req.query.lng);
   try {
-    const point = await cachedModelPoint({ lat, lng, cacheDir: path.join(DATA, "model-tiles") });
+    const point = await cachedModelPoint({ lat, lng, objects: store.objects });
     res.set("Cache-Control", "public, max-age=3600");
     res.json({
       source: "open-meteo",
@@ -304,24 +341,27 @@ v1.get("/cities", (_req, res) => {
 });
 
 async function citySummaryHandler(req: express.Request, res: express.Response) {
-  const db = await store.read();
-  const summary = db.citySummaries[param(req.params.cityId)];
+  const cityId = param(req.params.cityId);
+  const db = await store.read({ only: ["citySummaries"], cityId });
+  const summary = db.citySummaries[cityId];
   if (!summary) return res.status(404).json({ error: "summary_missing", hint: "run tick in demo mode" });
+  const stations = await store.stationsByCity(cityId);
+  const values = stations.map((station) => freshAqi(station).aqi).filter((aqi): aqi is number => aqi != null);
   res.setHeader("Cache-Control", "public, max-age=60");
-  res.json(summary);
+  res.json({ ...summary, cityAqi: median(values) ?? summary.cityAqi });
 }
 
 v1.get("/cities/:cityId/summary", citySummaryHandler);
 v1.get("/cities/:cityId/stations", async (req, res) => {
-  const db = await store.read();
-  const stations = Object.values(db.stations).filter((s) => s.cityId === param(req.params.cityId) && s.sourceFeed !== "waqi");
+  const db = await store.read({ only: ["config", "surfaceCells"], cityId: param(req.params.cityId) });
+  const stations = await store.stationsByCity(param(req.params.cityId));
   const surfaces = Object.values(db.surfaceCells).filter((cell) => cell.cityId === param(req.params.cityId) && cell.basis === "reports");
   let liveWaqi: typeof stations = [];
   if (db.config.dataMode === "live") {
     const city = getCity(param(req.params.cityId));
     if (city?.stations.sources.includes("waqi")) liveWaqi = await fetchLiveWaqi(city) as typeof stations;
   }
-  res.json({ stations: collapseNearbyStations([...stations, ...liveWaqi]), surfaces });
+  res.json({ stations: collapseNearbyStations([...stations, ...liveWaqi].map((station) => freshAqi(station))), surfaces });
 });
 
 v1.get("/stations", async (req, res) => {
@@ -332,20 +372,13 @@ v1.get("/stations", async (req, res) => {
   if (![west, south, east, north].every((n) => Number.isFinite(n))) {
     return res.status(400).json({ error: "bbox_required" });
   }
-  const db = await store.read();
-  const stations = Object.values(db.stations).filter((s) => {
-    if (s.sourceFeed === "waqi") return false;
-    const minLng = Math.min(west, east);
-    const maxLng = Math.max(west, east);
-    const minLat = Math.min(south, north);
-    const maxLat = Math.max(south, north);
-    return s.lng >= minLng && s.lng <= maxLng && s.lat >= minLat && s.lat <= maxLat;
-  });
+  const db = await store.read({ only: ["surfaceCells"] });
+  const stations = await store.stationsInBounds({ west, south, east, north });
   const surfaces = Object.values(db.surfaceCells).filter((cell) => cell.basis === "reports");
-  res.json({ stations: collapseNearbyStations(stations), surfaces });
+  res.json({ stations: collapseNearbyStations(stations.map((station) => freshAqi(station))), surfaces });
 });
 v1.get("/cities/:cityId/wards", async (req, res) => {
-  const db = await store.read();
+  const db = await store.read({ only: ["wards"], cityId: param(req.params.cityId) });
   const wards = Object.values(db.wards).filter((w) => w.cityId === param(req.params.cityId));
   res.setHeader("Cache-Control", "public, max-age=60");
   res.json({ wards });
@@ -362,7 +395,7 @@ v1.get("/zones/:h3", async (req, res) => {
   }
   const city = CITIES.find((c) => pointInBounds(center, c.bounds));
   const cityId = (req.query.cityId as string) || city?.id || "delhi";
-  const stations = Object.values(db.stations).filter((s) => s.cityId === cityId && s.online && s.aqi != null);
+  const stations = Object.values(db.stations).map((s) => freshAqi(s)).filter((s) => s.cityId === cityId && s.online && s.aqi != null);
   let nearest = null as (typeof stations)[number] | null;
   let distanceKm: number | null = null;
   for (const s of stations) {

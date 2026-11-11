@@ -16,26 +16,23 @@ function memoryStore(seed: Db = emptyDb()) {
 describe("authenticateBearer", () => {
   test("dev resident tokens never become operator", async () => {
     const store = memoryStore();
-    const user = await authenticateBearer("Bearer demo:op@zephyr.local", store, {
-      devAuth: true,
-      operatorEmails: "op@zephyr.local",
-    });
+    const user = await authenticateBearer("Bearer demo:op@zephyr.local", store, { devAuth: true });
     expect(user?.operator).toBe(false);
     expect(user?.role).toBe("resident");
     expect(whoamiPayload(user!).permissions).toEqual(["me.read", "me.write", "report.auth"]);
   });
 
-  test("dev operator tokens require allowlist and upsert the store role", async () => {
+  test("a stored operator flag is kept on the next sign-in", async () => {
     const store = memoryStore();
-    const user = await authenticateBearer("Bearer operator:op@zephyr.local", store, {
-      devAuth: true,
-      operatorEmails: "op@zephyr.local",
-    });
-    expect(user?.operator).toBe(true);
-    expect(user?.role).toBe("operator");
+    const first = await authenticateBearer("Bearer demo:op@zephyr.local", store, { devAuth: true });
+    expect(first?.role).toBe("resident");
     const db = await store.read();
-    expect(Object.values(db.users)[0]?.role).toBe("operator");
-    expect(whoamiPayload(user!).permissions).toContain("incidents.act");
+    const row = Object.values(db.users)[0]!;
+    row.role = "operator";
+    const again = await authenticateBearer("Bearer demo:op@zephyr.local", store, { devAuth: true });
+    expect(again?.role).toBe("operator");
+    expect(again?.operator).toBe(true);
+    expect(whoamiPayload(again!).permissions).toContain("incidents.act");
   });
 
   test("missing bearer is rejected", async () => {

@@ -27,37 +27,20 @@ function session(uid: string, email: string, role: Role): SessionUser {
   return { uid, email, role, operator: role === "operator" };
 }
 
-function claimOperatorFromAttributes(customAttributes: string | undefined): boolean {
-  if (!customAttributes) return false;
-  try {
-    const parsed = JSON.parse(customAttributes) as { operator?: boolean };
-    return parsed.operator === true;
-  } catch {
-    return false;
-  }
-}
-
-/** Dev bearer tokens. `demo:` is never operator; `operator:` needs OPERATOR_EMAILS. */
-export function devSession(token: string, enabled: boolean, operators: Set<string>): SessionUser | null {
+/** Dev bearer tokens. Both prefixes sign in as a resident until the stored account says operator. */
+export function devSession(token: string, enabled: boolean): SessionUser | null {
   if (!enabled) return null;
   const prefix = token.startsWith("demo:") ? "demo:" : token.startsWith("operator:") ? "operator:" : null;
   if (!prefix) return null;
   const email = token.slice(prefix.length).trim().toLowerCase();
   if (!email) return null;
-  const role: Role = prefix === "operator:" && operators.has(email) ? "operator" : "resident";
-  return session(email, email, role);
+  return session(email, email, "resident");
 }
 
-export function sessionFromAccount(
-  account: EmulatorAccount,
-  storedRole: Role | undefined,
-  operatorEmails: Set<string> = new Set(),
-): SessionUser | null {
+export function sessionFromAccount(account: EmulatorAccount, storedRole: Role | undefined): SessionUser | null {
   const email = account.email?.trim().toLowerCase();
   if (!account.localId || !email) return null;
-  const claimOperator = claimOperatorFromAttributes(account.customAttributes);
-  const role = resolveRole({ email, claimOperator, storedRole, operatorEmails });
-  return session(account.localId, email, role);
+  return session(account.localId, email, resolveRole({ storedRole }));
 }
 
 export async function lookupEmulatorAccount(host: string, idToken: string, apiKey: string): Promise<EmulatorAccount | null> {
@@ -158,7 +141,7 @@ export async function probeGoogleSignIn(apiKey: string, continueUri = "http://lo
   }
 }
 
-/** Last-resort Google ID token check (no audience binding). Role still uses OPERATOR_EMAILS. */
+/** Last-resort Google ID token check (no audience binding). Role comes from the stored account. */
 export async function lookupGoogleTokenInfo(token: string): Promise<{ sub: string; email: string } | null> {
   try {
     const res = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(token)}`);
@@ -171,19 +154,9 @@ export async function lookupGoogleTokenInfo(token: string): Promise<{ sub: strin
   }
 }
 
-export function sessionFromClaims(
-  claims: TokenClaims,
-  storedRole: Role | undefined,
-  operatorEmails: Set<string>,
-): SessionUser | null {
+export function sessionFromClaims(claims: TokenClaims, storedRole: Role | undefined): SessionUser | null {
   const email = claims.email?.trim().toLowerCase();
   const uid = (claims.user_id || claims.sub || "").trim();
   if (!email || !uid) return null;
-  const role = resolveRole({
-    email,
-    claimOperator: claims.operator === true,
-    storedRole,
-    operatorEmails,
-  });
-  return session(uid, email, role);
+  return session(uid, email, resolveRole({ storedRole }));
 }

@@ -8,11 +8,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = process.env.ZEPHYR_ROOT ?? path.resolve(__dirname, "../../..");
 loadEnv({ path: path.join(ROOT, ".env.local") });
 loadEnv({ path: path.join(ROOT, ".env") });
-const DATA = resolveFromRoot(ROOT, process.env.ZEPHYR_DATA_DIR, path.join(ROOT, ".data"));
 const FIXTURES = resolveFromRoot(ROOT, process.env.ZEPHYR_FIXTURES, path.join(ROOT, "fixtures"));
 const PORT = resolveListenPort("worker");
 
-const store = await openStore(DATA);
+const store = await openStore();
 export const app = express();
 app.use(express.json({ limit: "4mb" }));
 
@@ -40,7 +39,7 @@ app.post("/internal/catalog", async (_req, res) => {
 app.post("/internal/wind", async (_req, res) => {
   try {
     const result = await refreshWindGrid({
-      dataDir: DATA,
+      objects: store.objects,
       samplePath: path.join(FIXTURES, "wind", "sample.json"),
     });
     res.json({ ok: true, ...result });
@@ -53,7 +52,6 @@ function ingestRunOpts() {
   return {
     store,
     fixturesRoot: FIXTURES,
-    dataDir: DATA,
     sampleWindPath: path.join(FIXTURES, "wind", "sample.json"),
   };
 }
@@ -147,7 +145,7 @@ app.post("/internal/tasks/notify", async (req, res) => {
   res.status(204).end();
 });
 
-console.log(JSON.stringify({ event: "worker_boot", data: DATA, fixtures: FIXTURES, port: PORT }));
+console.log(JSON.stringify({ event: "worker_boot", fixtures: FIXTURES, port: PORT }));
 await store.ensure();
 console.log(JSON.stringify({ event: "store_ready" }));
 if (process.env.ZEPHYR_NO_LISTEN !== "1") {
@@ -155,7 +153,7 @@ if (process.env.ZEPHYR_NO_LISTEN !== "1") {
     console.log(`zephyr worker listening on :${PORT}`);
   });
   // Bootstrap after listen so health checks are not blocked by fixture ingest.
-  void runTick({ store, fixturesRoot: FIXTURES, dataDir: DATA })
+  void runTick({ store, fixturesRoot: FIXTURES })
     .then((r) => console.log(JSON.stringify({ event: "bootstrap_tick", ...r })))
     .catch((err) => console.error("bootstrap_tick_failed", err));
 }

@@ -80,7 +80,10 @@ function heuristic(hint: HazardType, flags: string[]): Classification {
 
 export async function generateZoneBrief(evidence: Record<string, unknown>, lang: string): Promise<string> {
   const key = process.env.GEMINI_API_KEY;
-  const fallback = `Air quality update (${lang}): nearest station and open hotspots are summarized from live evidence. ${JSON.stringify(evidence).slice(0, 280)}`;
+  const count = Array.isArray(evidence.incidents) ? evidence.incidents.length : 0;
+  const fallback = count
+    ? `Air quality update: ${count} open hotspot${count === 1 ? "" : "s"} in this cell. The station number on this page is the live reading.`
+    : "Air quality update: no open hotspot in this cell. The station number on this page is the live reading.";
   if (!key) return fallback;
   try {
     const res = await fetch(

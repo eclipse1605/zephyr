@@ -1,8 +1,5 @@
-import { mkdtemp, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import { describe, expect, test } from "bun:test";
-import { FileStore } from "../src/store.js";
+import { MemoryStore } from "../src/memoryStore.js";
 import { authorizeInternal, sniffImage, stripImageLocation, takeReportId } from "../src/uploads.js";
 
 describe("report ids and photo paths", () => {
@@ -14,13 +11,10 @@ describe("report ids and photo paths", () => {
     expect(created.ok).toBe(true);
   });
 
-  test("a traversal id cannot write outside photos", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "zephyr-photos-"));
-    const store = new FileStore(root);
+  test("a traversal id cannot be used as an object key", async () => {
+    const store = new MemoryStore();
     await expect(store.savePhoto("../pwned-by-id", Buffer.from("nope"))).rejects.toThrow("bad_id");
-    await expect(stat(path.join(root, "..", "pwned-by-id"))).rejects.toThrow();
-    const outside = path.resolve(root, "..", "pwned-by-id");
-    await expect(stat(outside)).rejects.toThrow();
+    expect(await store.objects.list("photos/")).toEqual([]);
   });
 
   test("zeros are not an image", () => {

@@ -106,10 +106,13 @@ function subIndex(concentration: number | null | undefined, bands: readonly Band
   if (concentration == null || !Number.isFinite(concentration) || concentration < 0) return null;
   for (const [cLow, cHigh, iLow, iHigh] of bands) {
     if (concentration <= cHigh) {
-      return Math.round(iLow + ((concentration - cLow) * (iHigh - iLow)) / (cHigh - cLow));
+      return Math.round(iLow + ((concentration - cLow) * (iHigh - iLow)) / (cHigh - cLow || 1));
     }
   }
-  return AQI_MAX;
+  // Past the top breakpoint the official scales stop at 500. Keep the last band's slope
+  // so a worse concentration still reads as a higher number.
+  const [cLow, cHigh, iLow, iHigh] = bands[bands.length - 1]!;
+  return Math.round(iLow + ((concentration - cLow) * (iHigh - iLow)) / (cHigh - cLow || 1));
 }
 
 export type IndiaAqi = {
@@ -120,11 +123,21 @@ export type IndiaAqi = {
   estimate: true;
 };
 
+/**
+ * CPCB CO breakpoints are mg/m³. OpenAQ and CAMS send µg/m³ (hundreds to thousands).
+ * Ambient CO above 80 mg/m³ does not occur, so those values are micrograms.
+ */
+function coMilligrams(value: number | null | undefined): number | null | undefined {
+  if (value == null) return value;
+  return value > 80 ? value / 1000 : value;
+}
+
 export function indiaAqiFromReadings(readings: PollutantReadings): IndiaAqi | null {
   let best: { pollutant: AqiPollutant; value: number } | null = null;
   const used: string[] = [];
   for (const pollutant of Object.keys(BANDS) as AqiPollutant[]) {
-    const value = subIndex(readings[pollutant], BANDS[pollutant]);
+    const raw = pollutant === "co" ? coMilligrams(readings.co) : readings[pollutant];
+    const value = subIndex(raw, BANDS[pollutant]);
     if (value === null) continue;
     used.push(POLLUTANT_LABELS[pollutant]);
     if (!best || value > best.value) best = { pollutant, value };

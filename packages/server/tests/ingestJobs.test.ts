@@ -1,8 +1,6 @@
-import { describe, expect, test } from "bun:test";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
-import { FileStore } from "../src/store.js";
+import { describe, expect, test } from "bun:test";
+import { MemoryStore } from "../src/memoryStore.js";
 import {
   claimNextJob,
   enqueueIngestJobs,
@@ -16,8 +14,7 @@ const fixturesRoot = path.resolve(import.meta.dir, "../../../fixtures");
 
 describe("ingest jobs", () => {
   test("enqueue returns without walking every city", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "zephyr-ingest-"));
-    const store = new FileStore(root);
+    const store = new MemoryStore();
     const t0 = Date.now();
     const queued = await enqueueIngestJobs(store);
     expect(Date.now() - t0).toBeLessThan(500);
@@ -28,13 +25,11 @@ describe("ingest jobs", () => {
   });
 
   test("a second catalog pass does not rewrite unchanged stations", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "zephyr-ingest-"));
-    const store = new FileStore(root);
+    const store = new MemoryStore();
     // Reject live wind immediately — default Open-Meteo fetch aborts at 25s and flakes CI (5s test timeout).
     const opts = {
       store,
       fixturesRoot,
-      dataDir: root,
       pageSize: 500,
       fetchWindGrid: async () => {
         throw new Error("offline");
@@ -55,12 +50,10 @@ describe("ingest jobs", () => {
   });
 
   test("killing mid-shard resumes from the saved cursor", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "zephyr-ingest-"));
-    const store = new FileStore(root);
+    const store = new MemoryStore();
     const opts = {
       store,
       fixturesRoot,
-      dataDir: root,
       pageSize: 1,
       workerId: "a",
       fetchWindGrid: async () => {
@@ -84,8 +77,7 @@ describe("ingest jobs", () => {
   });
 
   test("five failures mark the job dead and replay requeues it", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "zephyr-ingest-"));
-    const store = new FileStore(root);
+    const store = new MemoryStore();
     const queued = await enqueueIngestJobs(store);
     const jobId = queued.jobIds[0]!;
     const db = await store.read();

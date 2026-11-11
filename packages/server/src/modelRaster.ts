@@ -1,7 +1,6 @@
-import { mkdir, readFile, stat, utimes, writeFile } from "node:fs/promises";
-import path from "node:path";
 import { crc32, deflateSync, inflateSync } from "node:zlib";
-import { PM25_BREAKPOINTS, concentrationToUsAqi, usAqiFromReadings } from "@zephyr/domain";
+import { usAqiFromReadings } from "@zephyr/domain";
+import type { ObjectStore } from "./objectStore.js";
 
 export const RASTER_MAX_ZOOM = 8;
 export const MODEL_TTL_MS = 60 * 60 * 1000;
@@ -36,6 +35,36 @@ const PRIOR_PAINT_VERSIONS = [
 ] as const;
 /** Transparent / near-empty tiles — never treat as a warm cache hit. */
 export const BLANK_TILE_MAX_BYTES = 4096;
+
+const pngLru = new Map<string, Buffer>();
+
+function rememberPng(key: string, png: Buffer): void {
+  if (pngLru.has(key)) pngLru.delete(key);
+  pngLru.set(key, png);
+  while (pngLru.size > 256) {
+    const oldest = pngLru.keys().next().value;
+    if (oldest === undefined) break;
+    pngLru.delete(oldest);
+  }
+}
+
+function tilePngKey(version: string, layer: string, z: number, x: number, y: number): string {
+  return `model-tiles/${version}/${layer}/${z}/${x}/${y}.png`;
+}
+
+function samplesKey(z: number, x: number, y: number): string {
+  return `model-tiles/${TILE_PAINT_VERSION}/_samples/${z}/${x}/${y}.json`;
+}
+
+function pointKey(key: string): string {
+  return `model-tiles/points/${key}.json`;
+}
+
+async function objectAge(objects: ObjectStore, key: string, now: number): Promise<number | null> {
+  const info = await objects.stat(key);
+  if (!info) return null;
+  return now - info.updatedAt.getTime();
+}
 
 const inflight = new Map<string, Promise<{ png: Buffer; cached: boolean; stale?: boolean; blank?: boolean }>>();
 const sampleMemory = new Map<string, { at: number; reading: ModelReading }>();
@@ -98,7 +127,9 @@ const AQI_STOPS: Array<{ aqi: number; rgb: [number, number, number] }> = [
 ];
 
 export function readingScalar(layer: RasterLayer, reading: ModelReading): number | null {
-  if (layer === "pm25") return concentrationToUsAqi(reading.pm25, PM25_BREAKPOINTS);
+  // PM2.5 stays in µg/m³. Converting it to US AQI made the toggle a no-op wherever
+  // PM2.5 was already the dominant pollutant (the usual case).
+  if (layer === "pm25") return reading.pm25;
   return modelAqi(reading);
 }
 
@@ -115,10 +146,37 @@ export function aqiToRgba(aqi: number): [number, number, number, number] {
   return [mix(a.rgb[0], b.rgb[0]), mix(a.rgb[1], b.rgb[1]), mix(a.rgb[2], b.rgb[2]), alpha];
 }
 
+/** µg/m³ stops. Starts blue, not green, so it cannot be mistaken for the AQI ramp. */
+const PM25_STOPS: Array<{ value: number; rgb: [number, number, number] }> = [
+  { value: 0, rgb: [64, 156, 214] },
+  { value: 12, rgb: [86, 214, 140] },
+  { value: 35, rgb: [255, 214, 64] },
+  { value: 55, rgb: [255, 140, 48] },
+  { value: 150, rgb: [214, 48, 48] },
+  { value: 250, rgb: [120, 24, 64] },
+  { value: 500, rgb: [36, 12, 28] },
+];
+
+function ramp(stops: Array<{ value: number; rgb: [number, number, number] }>, value: number, alphaFor: (v: number) => number): [number, number, number, number] {
+  const clamped = Math.max(stops[0]!.value, Math.min(stops[stops.length - 1]!.value, value));
+  let i = 0;
+  while (i < stops.length - 2 && clamped > stops[i + 1]!.value) i += 1;
+  const a = stops[i]!;
+  const b = stops[i + 1]!;
+  const t = (clamped - a.value) / Math.max(1, b.value - a.value);
+  const mix = (lo: number, hi: number) => Math.round(lo + (hi - lo) * t);
+  return [mix(a.rgb[0], b.rgb[0]), mix(a.rgb[1], b.rgb[1]), mix(a.rgb[2], b.rgb[2]), alphaFor(clamped)];
+}
+
+export function scalarToRgba(layer: RasterLayer, value: number): [number, number, number, number] {
+  if (layer === "pm25") return ramp(PM25_STOPS, value, (v) => Math.round(130 + Math.min(70, v * 0.3)));
+  return aqiToRgba(value);
+}
+
 export function rasterColor(layer: RasterLayer, reading: ModelReading): [number, number, number, number] {
-  const aqi = readingScalar(layer, reading);
-  if (aqi == null) return [40, 48, 56, 0];
-  return aqiToRgba(aqi);
+  const value = readingScalar(layer, reading);
+  if (value == null) return [40, 48, 56, 0];
+  return scalarToRgba(layer, value);
 }
 
 function sampleScalarGrid(grid: Array<number | null>, side: number, u: number, v: number): number | null {
@@ -195,7 +253,7 @@ export function paintTile(layer: RasterLayer, readings: ModelReading[], cells?: 
     for (let px = 0; px < size; px++) {
       const u = (px / last) * extent;
       const aqi = sampleScalarGrid(grid, side, u, v);
-      const [r, g, b, a] = aqi == null ? [40, 48, 56, 0] : aqiToRgba(aqi);
+      const [r, g, b, a] = aqi == null ? [40, 48, 56, 0] : scalarToRgba(layer, aqi);
       const i = (py * size + px) * 4;
       rgba[i] = r;
       rgba[i + 1] = g;
@@ -391,36 +449,31 @@ function readingsAreBlank(layer: RasterLayer, readings: ModelReading[]): boolean
   return readings.every((reading) => readingScalar(layer, reading) == null);
 }
 
-function samplesFile(cacheDir: string, z: number, x: number, y: number): string {
-  return path.join(cacheDir, TILE_PAINT_VERSION, "_samples", String(z), String(x), `${y}.json`);
-}
-
 async function writeTileSamples(
-  cacheDir: string,
+  objects: ObjectStore,
   z: number,
   x: number,
   y: number,
   readings: ModelReading[],
   now: number,
 ): Promise<void> {
-  const file = samplesFile(cacheDir, z, x, y);
-  await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, JSON.stringify(readings));
-  await utimes(file, now / 1000, now / 1000);
+  await objects.put(samplesKey(z, x, y), Buffer.from(JSON.stringify(readings)), "application/json", new Date(now));
 }
 
 async function readTileSamples(
-  cacheDir: string,
+  objects: ObjectStore,
   z: number,
   x: number,
   y: number,
   now: number,
 ): Promise<ModelReading[] | null> {
-  const file = samplesFile(cacheDir, z, x, y);
-  const age = await ageMs(file, now);
+  const key = samplesKey(z, x, y);
+  const age = await objectAge(objects, key, now);
   if (age == null || age > MODEL_STALE_MS) return null;
   try {
-    const parsed = JSON.parse(await readFile(file, "utf8")) as ModelReading[];
+    const raw = await objects.get(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw.toString("utf8")) as ModelReading[];
     return Array.isArray(parsed) && parsed.length > 0 ? parsed : null;
   } catch {
     return null;
@@ -479,7 +532,7 @@ export function alignTileEdges(
 }
 
 async function loadNeighborPng(
-  cacheDir: string,
+  objects: ObjectStore,
   layer: RasterLayer,
   z: number,
   x: number,
@@ -488,16 +541,7 @@ async function loadNeighborPng(
 ): Promise<Buffer | null> {
   const limit = 2 ** z;
   if (x < 0 || y < 0 || x >= limit || y >= limit) return null;
-  return findPaintedTile(cacheDir, layer, z, x, y, now);
-}
-
-async function ageMs(file: string, now: number): Promise<number | null> {
-  try {
-    const info = await stat(file);
-    return now - info.mtimeMs;
-  } catch {
-    return null;
-  }
+  return findPaintedTile(objects, layer, z, x, y, now);
 }
 
 function sampleKey(lat: number, lng: number): string {
@@ -518,7 +562,7 @@ async function resolveSamples(
   samples: Array<{ lat: number; lng: number }>,
   now: number,
   fetchGrid: GridFetch,
-  cacheDir?: string,
+  objects?: ObjectStore,
 ): Promise<ModelReading[]> {
   const readings: ModelReading[] = samples.map(() => EMPTY);
   const missing: Array<{ index: number; lat: number; lng: number; key: string }> = [];
@@ -529,12 +573,14 @@ async function resolveSamples(
       readings[i] = hit.reading;
       continue;
     }
-    if (cacheDir) {
+    if (objects) {
       try {
-        const pointFile = path.join(cacheDir, "points", `${key}.json`);
-        const age = await ageMs(pointFile, now);
+        const keyName = pointKey(key);
+        const age = await objectAge(objects, keyName, now);
         if (age != null && age < MODEL_STALE_MS) {
-          const saved = JSON.parse(await readFile(pointFile, "utf8")) as ModelReading;
+          const raw = await objects.get(keyName);
+          if (!raw) continue;
+          const saved = JSON.parse(raw.toString("utf8")) as ModelReading;
           sampleMemory.set(key, { at: now - age, reading: saved });
           readings[i] = saved;
           continue;
@@ -568,6 +614,76 @@ async function resolveSamples(
   return readings;
 }
 
+/** One CAMS image for the whole globe. Per-tile paints left hard squares and empty oceans. */
+export async function renderWorldField(opts: {
+  layer: RasterLayer;
+  objects: ObjectStore;
+  now?: number;
+  fetchGrid?: GridFetch;
+}): Promise<Buffer> {
+  const now = opts.now ?? Date.now();
+  const key = `model-tiles/world/${opts.layer}-v2.png`;
+  const cached = await opts.objects.get(key);
+  const age = await objectAge(opts.objects, key, now);
+  if (cached && age != null && age < MODEL_TTL_MS && !isBlankPng(cached)) return cached;
+
+  const latStep = 15;
+  const lngStep = 15;
+  const lats: number[] = [];
+  for (let lat = -60; lat <= 60; lat += latStep) lats.push(lat);
+  const lngs: number[] = [];
+  for (let lng = -180; lng < 180; lng += lngStep) lngs.push(lng);
+  const samples: Array<{ lat: number; lng: number }> = [];
+  for (const lat of lats) for (const lng of lngs) samples.push({ lat, lng });
+
+  let scalars: Array<number | null>;
+  try {
+    const readings = await (opts.fetchGrid ?? fetchOpenMeteoGrid)(samples);
+    scalars = readings.map((reading) => readingScalar(opts.layer, reading));
+  } catch (err) {
+    if (cached && !isBlankPng(cached)) return cached;
+    throw err;
+  }
+
+  const width = 720;
+  const height = 360;
+  const rgba = Buffer.alloc(width * height * 4);
+  const at = (latIndex: number, lngIndex: number) => scalars[latIndex * lngs.length + (lngIndex % lngs.length)] ?? null;
+  for (let y = 0; y < height; y++) {
+    const lat = 85 - (y / (height - 1)) * 170;
+    const latPos = (Math.max(-60, Math.min(60, lat)) + 60) / latStep;
+    const lat0 = Math.min(lats.length - 2, Math.max(0, Math.floor(latPos)));
+    const ty = latPos - lat0;
+    for (let x = 0; x < width; x++) {
+      const lng = -180 + (x / (width - 1)) * 360;
+      const wrapped = ((lng + 180) % 360 + 360) % 360;
+      const lngPos = wrapped / lngStep;
+      const lng0 = Math.floor(lngPos) % lngs.length;
+      const tx = lngPos - Math.floor(lngPos);
+      const corners = [at(lat0, lng0), at(lat0, lng0 + 1), at(lat0 + 1, lng0), at(lat0 + 1, lng0 + 1)];
+      const weights = [(1 - tx) * (1 - ty), tx * (1 - ty), (1 - tx) * ty, tx * ty];
+      let sum = 0;
+      let weight = 0;
+      for (let i = 0; i < 4; i++) {
+        const value = corners[i];
+        if (value == null) continue;
+        sum += value * weights[i]!;
+        weight += weights[i]!;
+      }
+      const aqi = weight > 0 ? sum / weight : null;
+      const [r, g, b, a] = aqi == null ? [0, 0, 0, 0] : scalarToRgba(opts.layer, aqi);
+      const i = (y * width + x) * 4;
+      rgba[i] = r;
+      rgba[i + 1] = g;
+      rgba[i + 2] = b;
+      rgba[i + 3] = a;
+    }
+  }
+  const png = encodeRgbaPng(width, height, rgba);
+  await opts.objects.put(key, png, "image/png", new Date(now));
+  return png;
+}
+
 export async function fetchOpenMeteoGrid(samples: Array<{ lat: number; lng: number }>): Promise<ModelReading[]> {
   const url = new URL("https://air-quality-api.open-meteo.com/v1/air-quality");
   url.searchParams.set("latitude", samples.map((sample) => sample.lat.toFixed(3)).join(","));
@@ -593,12 +709,15 @@ function readingFrom(row: unknown): ModelReading {
   };
 }
 
-async function loadTileFile(file: string, now: number): Promise<{ png: Buffer; age: number } | null> {
-  const age = await ageMs(file, now);
+async function loadTileFile(objects: ObjectStore, key: string, now: number): Promise<{ png: Buffer; age: number } | null> {
+  const cached = pngLru.get(key);
+  const age = await objectAge(objects, key, now);
+  if (cached && age != null && age <= MODEL_STALE_MS && !isBlankPng(cached)) return { png: cached, age };
   if (age == null || age > MODEL_STALE_MS) return null;
   try {
-    const png = await readFile(file);
-    if (isBlankPng(png)) return null;
+    const png = await objects.get(key);
+    if (!png || isBlankPng(png)) return null;
+    rememberPng(key, png);
     return { png, age };
   } catch {
     return null;
@@ -606,7 +725,7 @@ async function loadTileFile(file: string, now: number): Promise<{ png: Buffer; a
 }
 
 async function findPaintedTile(
-  cacheDir: string,
+  objects: ObjectStore,
   layer: RasterLayer,
   z: number,
   x: number,
@@ -614,11 +733,11 @@ async function findPaintedTile(
   now: number,
 ): Promise<Buffer | null> {
   const candidates = [
-    path.join(cacheDir, TILE_PAINT_VERSION, layer, String(z), String(x), `${y}.png`),
-    ...PRIOR_PAINT_VERSIONS.map((ver) => path.join(cacheDir, ver, layer, String(z), String(x), `${y}.png`)),
+    tilePngKey(TILE_PAINT_VERSION, layer, z, x, y),
+    ...PRIOR_PAINT_VERSIONS.map((ver) => tilePngKey(ver, layer, z, x, y)),
   ];
-  for (const file of candidates) {
-    const hit = await loadTileFile(file, now);
+  for (const key of candidates) {
+    const hit = await loadTileFile(objects, key, now);
     if (hit) return hit.png;
   }
   return null;
@@ -629,7 +748,7 @@ async function synthesizeFromParent(opts: {
   z: number;
   x: number;
   y: number;
-  cacheDir: string;
+  objects: ObjectStore;
   now: number;
   depth?: number;
 }): Promise<Buffer | null> {
@@ -639,10 +758,10 @@ async function synthesizeFromParent(opts: {
     z: opts.z - 1,
     x: Math.floor(opts.x / 2),
     y: Math.floor(opts.y / 2),
-    cacheDir: opts.cacheDir,
+    objects: opts.objects,
     now: opts.now,
   };
-  let parentPng = await findPaintedTile(parent.cacheDir, parent.layer, parent.z, parent.x, parent.y, parent.now);
+  let parentPng = await findPaintedTile(parent.objects, parent.layer, parent.z, parent.x, parent.y, parent.now);
   if (!parentPng) {
     // Recurse: build/load parent (may itself synthesize), without vendor fetch here.
     parentPng = await synthesizeFromParent({ ...parent, depth: (opts.depth ?? 0) + 1 });
@@ -705,7 +824,7 @@ export async function composeModelField(opts: {
   y0: number;
   x1: number;
   y1: number;
-  cacheDir: string;
+  objects: ObjectStore;
   now?: number;
   fetchGrid?: GridFetch;
 }): Promise<{ png: Buffer; west: number; east: number; north: number; south: number }> {
@@ -728,7 +847,7 @@ export async function composeModelField(opts: {
         z,
         x: tx,
         y: ty,
-        cacheDir: opts.cacheDir,
+        objects: opts.objects,
         now,
         fetchGrid: opts.fetchGrid,
       });
@@ -762,7 +881,7 @@ export async function cachedModelTile(opts: {
   z: number;
   x: number;
   y: number;
-  cacheDir: string;
+  objects: ObjectStore;
   now?: number;
   fetchGrid?: GridFetch;
 }): Promise<{ png: Buffer; cached: boolean; stale?: boolean; blank?: boolean }> {
@@ -772,13 +891,13 @@ export async function cachedModelTile(opts: {
     throw new Error("tile");
   }
   const now = opts.now ?? Date.now();
-  const file = path.join(opts.cacheDir, TILE_PAINT_VERSION, opts.layer, String(opts.z), String(opts.x), `${opts.y}.png`);
+  const file = tilePngKey(TILE_PAINT_VERSION, opts.layer, opts.z, opts.x, opts.y);
   const key = `${TILE_PAINT_VERSION}/${opts.layer}/${opts.z}/${opts.x}/${opts.y}`;
   const existing = inflight.get(key);
   if (existing) return existing;
 
   const work = (async () => {
-    const fresh = await loadTileFile(file, now);
+    const fresh = await loadTileFile(opts.objects, file, now);
     if (fresh && fresh.age < MODEL_TTL_MS) return { png: fresh.png, cached: true };
 
     const finish = async (png: Buffer, meta: { cached: boolean; stale?: boolean; blank?: boolean }, layer = opts.layer) => {
@@ -786,15 +905,14 @@ export async function cachedModelTile(opts: {
         return meta.blank ? { ...meta, png, blank: true as const } : { ...meta, png };
       }
       const aligned = alignTileEdges(png, {
-        north: await loadNeighborPng(opts.cacheDir, layer, opts.z, opts.x, opts.y - 1, now),
-        south: await loadNeighborPng(opts.cacheDir, layer, opts.z, opts.x, opts.y + 1, now),
-        west: await loadNeighborPng(opts.cacheDir, layer, opts.z, opts.x - 1, opts.y, now),
-        east: await loadNeighborPng(opts.cacheDir, layer, opts.z, opts.x + 1, opts.y, now),
+        north: await loadNeighborPng(opts.objects, layer, opts.z, opts.x, opts.y - 1, now),
+        south: await loadNeighborPng(opts.objects, layer, opts.z, opts.x, opts.y + 1, now),
+        west: await loadNeighborPng(opts.objects, layer, opts.z, opts.x - 1, opts.y, now),
+        east: await loadNeighborPng(opts.objects, layer, opts.z, opts.x + 1, opts.y, now),
       });
-      const outFile = path.join(opts.cacheDir, TILE_PAINT_VERSION, layer, String(opts.z), String(opts.x), `${opts.y}.png`);
-      await mkdir(path.dirname(outFile), { recursive: true });
-      await writeFile(outFile, aligned);
-      await utimes(outFile, now / 1000, now / 1000);
+      const outFile = tilePngKey(TILE_PAINT_VERSION, layer, opts.z, opts.x, opts.y);
+      await opts.objects.put(outFile, aligned, "image/png", new Date(now));
+      rememberPng(outFile, aligned);
       return { ...meta, png: aligned };
     };
 
@@ -805,19 +923,34 @@ export async function cachedModelTile(opts: {
       return finish(png, { cached: false, stale: stale || undefined }, layer);
     };
 
+    // City zooms reuse a painted parent. Fetching a new Open-Meteo grid per tile
+    // is what made cells appear late or not at all when the browser aborted them.
+    if (opts.z > 2) {
+      const parentTile = await synthesizeFromParent({
+        layer: opts.layer,
+        z: opts.z,
+        x: opts.x,
+        y: opts.y,
+        objects: opts.objects,
+        now,
+      });
+      if (parentTile) return finish(parentTile, { cached: true, stale: true });
+      return { png: EMPTY_TILE, cached: false, stale: true, blank: true };
+    }
+
     const cells = sampleCellsForZoom(opts.z);
     const samples = tileSamples(opts.z, opts.x, opts.y, cells);
     let readings: ModelReading[] | null = null;
     try {
-      readings = await resolveSamples(samples, now, opts.fetchGrid ?? fetchOpenMeteoGrid, opts.cacheDir);
+      readings = await resolveSamples(samples, now, opts.fetchGrid ?? fetchOpenMeteoGrid, opts.objects);
     } catch {
       readings = null;
     }
     if (!readings || readingsAreBlank(opts.layer, readings)) {
-      readings = (await readTileSamples(opts.cacheDir, opts.z, opts.x, opts.y, now)) ?? readings;
+      readings = (await readTileSamples(opts.objects, opts.z, opts.x, opts.y, now)) ?? readings;
     }
     if (readings && (!readingsAreBlank("aqi", readings) || !readingsAreBlank("pm25", readings))) {
-      await writeTileSamples(opts.cacheDir, opts.z, opts.x, opts.y, readings, now);
+      await writeTileSamples(opts.objects, opts.z, opts.x, opts.y, readings, now);
       const sibling: RasterLayer = opts.layer === "aqi" ? "pm25" : "aqi";
       const primary = await paintFromReadings(opts.layer, readings, cells, false);
       // Co-paint the other layer from the same samples so PM2.5 is not blank after AQI warms.
@@ -829,7 +962,7 @@ export async function cachedModelTile(opts: {
 
     // Promote older paints into the current version with an interior soften so globe
     // overzoom looks less blocky when Open-Meteo is rate-limited.
-    const prior = await findPaintedTile(opts.cacheDir, opts.layer, opts.z, opts.x, opts.y, now);
+    const prior = await findPaintedTile(opts.objects, opts.layer, opts.z, opts.x, opts.y, now);
     if (prior) {
       try {
         return finish(softenTileInterior(prior, 2), { cached: true, stale: true });
@@ -843,7 +976,7 @@ export async function cachedModelTile(opts: {
       z: opts.z,
       x: opts.x,
       y: opts.y,
-      cacheDir: opts.cacheDir,
+      objects: opts.objects,
       now,
     });
     if (fromParent) return finish(fromParent, { cached: false, stale: true });
@@ -851,7 +984,7 @@ export async function cachedModelTile(opts: {
     // Last resort under vendor 429: reuse the sibling layer's paint so the map
     // toggle is not a hole. PM2.5 and combined AQI usually track closely.
     const siblingLayer: RasterLayer = opts.layer === "aqi" ? "pm25" : "aqi";
-    const sibling = await findPaintedTile(opts.cacheDir, siblingLayer, opts.z, opts.x, opts.y, now);
+    const sibling = await findPaintedTile(opts.objects, siblingLayer, opts.z, opts.x, opts.y, now);
     if (sibling && !isBlankPng(sibling)) {
       return finish(sibling, { cached: true, stale: true });
     }
@@ -870,7 +1003,7 @@ export async function cachedModelTile(opts: {
 export async function cachedModelPoint(opts: {
   lat: number;
   lng: number;
-  cacheDir: string;
+  objects: ObjectStore;
   now?: number;
   fetchGrid?: GridFetch;
 }): Promise<ModelReading & { aqi: number | null; cached: boolean }> {
@@ -883,25 +1016,29 @@ export async function cachedModelPoint(opts: {
   if (mem && now - mem.at < MODEL_TTL_MS) {
     return { ...mem.reading, aqi: modelAqi(mem.reading), cached: true };
   }
-  const file = path.join(opts.cacheDir, "points", `${key}.json`);
-  const age = await ageMs(file, now);
+  const file = pointKey(key);
+  const age = await objectAge(opts.objects, file, now);
   if (age != null && age < MODEL_TTL_MS) {
-    const saved = JSON.parse(await readFile(file, "utf8")) as ModelReading;
-    sampleMemory.set(key, { at: now - age, reading: saved });
-    return { ...saved, aqi: modelAqi(saved), cached: true };
+    const raw = await opts.objects.get(file);
+    if (raw) {
+      const saved = JSON.parse(raw.toString("utf8")) as ModelReading;
+      sampleMemory.set(key, { at: now - age, reading: saved });
+      return { ...saved, aqi: modelAqi(saved), cached: true };
+    }
   }
   try {
     const [reading] = await queuedFetch([{ lat: opts.lat, lng: opts.lng }], opts.fetchGrid ?? fetchOpenMeteoGrid);
     const value = reading ?? EMPTY;
     sampleMemory.set(key, { at: now, reading: value });
-    await mkdir(path.dirname(file), { recursive: true });
-    await writeFile(file, JSON.stringify(value));
-    await utimes(file, now / 1000, now / 1000);
+    await opts.objects.put(file, Buffer.from(JSON.stringify(value)), "application/json", new Date(now));
     return { ...value, aqi: modelAqi(value), cached: false };
   } catch (err) {
     if (age != null && age < MODEL_STALE_MS) {
-      const saved = JSON.parse(await readFile(file, "utf8")) as ModelReading;
-      return { ...saved, aqi: modelAqi(saved), cached: true };
+      const raw = await opts.objects.get(file);
+      if (raw) {
+        const saved = JSON.parse(raw.toString("utf8")) as ModelReading;
+        return { ...saved, aqi: modelAqi(saved), cached: true };
+      }
     }
     throw err;
   }

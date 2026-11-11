@@ -1,6 +1,6 @@
 import { createHash, createSign } from "node:crypto";
 import { googleAccessToken } from "./live.js";
-import type { FileStore } from "./store.js";
+import type { Store } from "./store.js";
 
 export function resolveProjectId(): string {
   return (
@@ -79,13 +79,13 @@ export async function insertHourly(
   return res.ok;
 }
 
-export async function syncState(store: FileStore): Promise<void> {
+export async function syncState(store: Store): Promise<void> {
   if (!resolveProjectId()) return;
   const db = await store.read();
   await insertHourly(db.hourly);
 }
 
-export async function deliverPendingTasks(store: FileStore): Promise<number> {
+export async function deliverPendingTasks(store: Store): Promise<number> {
   const db = await store.read();
   const tasks = [...(db.pendingTasks ?? [])];
   db.pendingTasks = [];

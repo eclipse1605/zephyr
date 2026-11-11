@@ -4,12 +4,12 @@ import { resolveRole } from "../src/rbac.js";
 
 describe("firebase sessions", () => {
   test("demo tokens are rejected when dev auth is off", () => {
-    expect(devSession("demo:resident@zephyr.local", false, new Set(["resident@zephyr.local"]))).toBeNull();
-    expect(devSession("operator:op@zephyr.local", false, new Set(["op@zephyr.local"]))).toBeNull();
+    expect(devSession("demo:resident@zephyr.local", false)).toBeNull();
+    expect(devSession("operator:op@zephyr.local", false)).toBeNull();
   });
 
-  test("demo tokens never grant operator even when email is allowlisted", () => {
-    const session = devSession("demo:op@zephyr.local", true, new Set(["op@zephyr.local"]));
+  test("demo tokens never grant operator", () => {
+    const session = devSession("demo:op@zephyr.local", true);
     expect(session).toEqual({
       uid: "op@zephyr.local",
       email: "op@zephyr.local",
@@ -18,9 +18,8 @@ describe("firebase sessions", () => {
     });
   });
 
-  test("operator tokens require the allowlist", () => {
-    expect(devSession("operator:op@zephyr.local", true, new Set(["op@zephyr.local"]))?.operator).toBe(true);
-    expect(devSession("operator:stranger@zephyr.local", true, new Set(["op@zephyr.local"]))?.operator).toBe(false);
+  test("the operator prefix does not grant operator", () => {
+    expect(devSession("operator:op@zephyr.local", true)?.operator).toBe(false);
   });
 
   test("a resident claim cannot open operator actions", () => {
@@ -33,44 +32,25 @@ describe("firebase sessions", () => {
     });
   });
 
-  test("an operator claim or stored role can open operator actions", () => {
+  test("only a stored operator role opens operator actions", () => {
     const fromClaim = sessionFromAccount(
       { localId: "abc12345", email: "op@zephyr.local", customAttributes: JSON.stringify({ operator: true }) },
       undefined,
     );
     const fromStore = sessionFromAccount({ localId: "abc12345", email: "op@zephyr.local" }, "operator");
-    expect(fromClaim?.operator).toBe(true);
-    expect(fromClaim?.role).toBe("operator");
+    expect(fromClaim?.operator).toBe(false);
     expect(fromStore?.operator).toBe(true);
   });
 
-  test("operator email allowlist elevates emulator accounts without a claim", () => {
-    const session = sessionFromAccount(
-      { localId: "abc12345", email: "op@zephyr.local" },
-      "resident",
-      new Set(["op@zephyr.local"]),
-    );
-    // stored resident wins over allowlist only when stored is checked first — resolveRole
-    // prefers storedRole === operator, then claim, then allowlist. resident stored does not block allowlist.
-    expect(resolveRole({
-      email: "op@zephyr.local",
-      storedRole: "resident",
-      operatorEmails: new Set(["op@zephyr.local"]),
-    })).toBe("operator");
-    expect(session?.operator).toBe(true);
+  test("a stored resident stays a resident", () => {
+    const session = sessionFromAccount({ localId: "abc12345", email: "op@zephyr.local" }, "resident");
+    expect(resolveRole({ storedRole: "resident" })).toBe("resident");
+    expect(session?.operator).toBe(false);
   });
 
-  test("sessionFromClaims maps custom operator claim", () => {
-    const session = sessionFromClaims(
-      { sub: "uid1", email: "op@zephyr.local", operator: true },
-      undefined,
-      new Set(),
-    );
-    expect(session).toEqual({
-      uid: "uid1",
-      email: "op@zephyr.local",
-      role: "operator",
-      operator: true,
-    });
+  test("sessionFromClaims ignores a custom operator claim without a stored flag", () => {
+    const session = sessionFromClaims({ sub: "uid1", email: "op@zephyr.local", operator: true }, undefined);
+    expect(session?.role).toBe("resident");
+    expect(sessionFromClaims({ sub: "uid1", email: "op@zephyr.local" }, "operator")?.role).toBe("operator");
   });
 });

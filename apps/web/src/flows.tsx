@@ -12,6 +12,7 @@ import {
   type Health,
   type OperatorIncident,
   type ReportView,
+  type ModelPoint,
   type UpwindSource,
   type ZoneView,
 } from "./api";
@@ -20,8 +21,14 @@ import { AuthPanel } from "./authPanel";
 import { t } from "./i18n";
 import { useLang } from "./lang";
 import { mapStyleUrl, retryLabel } from "./mapStyle";
-import { formatWhen, PageHead, Status } from "./uiBits";
+import { toast } from "sonner";
+import { aqiTone, formatWhen, HomeSkeleton, PageHead, PanelSkeleton } from "./uiBits";
+import "./home.css";
 import "./flows.css";
+
+const REPORT_SENT: Record<string, string> = {
+  en: "Report sent", hi: "रिपोर्ट भेज दी गई", mr: "अहवाल पाठवला", bn: "রিপোর্ট পাঠানো হয়েছে", ta: "அறிக்கை அனுப்பப்பட்டது", kn: "ವರದಿ ಕಳುಹಿಸಲಾಗಿದೆ", te: "నివేదిక పంపబడింది", zh: "报告已发送", ru: "Сообщение отправлено", ar: "أُرسل البلاغ", id: "Laporan terkirim", pt: "Relato enviado",
+};
 
 const HAZARDS = ["smoke", "dust", "haze", "fire", "trash_fire", "construction", "other"] as const;
 const HAZARD_KEY: Record<(typeof HAZARDS)[number], string> = {
@@ -906,6 +913,29 @@ function forecastSamples(hours: Array<{ at: string; pm25: number }> | undefined)
   };
 }
 
+function Spark({ hours }: { hours: Array<{ at: string; pm25: number }> }) {
+  const finite = hours.filter((hour) => Number.isFinite(hour.pm25));
+  if (finite.length < 2) return null;
+  const values = finite.map((hour) => hour.pm25);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min || 1;
+  const width = 240;
+  const height = 52;
+  const d = finite
+    .map((point, index) => {
+      const x = (index / (finite.length - 1)) * width;
+      const y = height - 4 - ((point.pm25 - min) / span) * (height - 8);
+      return `${index ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+  return (
+    <svg className="spark" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${Math.round(min)}–${Math.round(max)}`}>
+      <path d={d} />
+    </svg>
+  );
+}
+
 function MethodChip({ lang, name, block }: { lang: string; name: string; block?: ForecastBlock | null }) {
   const samples = block?.error ? null : forecastSamples(block?.hours);
   let detail = t(lang, "unavailable");
@@ -916,6 +946,7 @@ function MethodChip({ lang, name, block }: { lang: string; name: string; block?:
     <div className="method">
       <strong>{name}</strong>
       <span className="muted">{detail}</span>
+      {block?.hours && block.hours.length > 1 && !block.error ? <Spark hours={block.hours} /> : null}
       {samples ? (
         <small className="muted">
           {samples.points.map((point, index) => (
@@ -1070,9 +1101,12 @@ export function ReportPage({ cityId, cities, auth }: { cityId: string; cities: C
         setLat(city.center.lat);
         setLng(city.center.lng);
       }
+      toast.success(REPORT_SENT[lang] ?? REPORT_SENT.en);
       navigate(`/track/${created.reportId}`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const message = e instanceof Error ? e.message : String(e);
+      setError(message);
+      toast.error(message);
     } finally {
       setBusy(false);
     }
@@ -1235,7 +1269,7 @@ export function TrackPage({ cityId }: { cityId: string }) {
 
   const view = loadedFor === id ? data : null;
 
-  if (!id) return <Status>{t(lang, "loading")}</Status>;
+  if (!id) return <PanelSkeleton />;
   if (!view) {
     return (
       <div className="stack">
@@ -1251,7 +1285,7 @@ export function TrackPage({ cityId }: { cityId: string }) {
             <button type="button" onClick={() => setTrackAttempt((n) => n + 1)}>{retryLabel(lang)}</button>
           </div>
         ) : (
-          <Status>{t(lang, "loading")}</Status>
+          <PanelSkeleton />
         )}
       </div>
     );
@@ -1342,11 +1376,13 @@ export function TrackPage({ cityId }: { cityId: string }) {
   );
 }
 
-export function ZonePage({ cityId, auth, login }: { cityId: string; auth: Auth | null; login: (email: string, operator: boolean) => void }) {
+export function ZonePage({ cityId, auth }: { cityId: string; auth: Auth | null; login: (email: string, operator: boolean) => void }) {
   const lang = useLang();
   const { h3 = "" } = useParams();
   const canSpeak = useSpeechReady(lang);
   const [zone, setZone] = useState<ZoneView | null>(null);
+  const [model, setModel] = useState<ModelPoint | null>(null);
+  const [modelState, setModelState] = useState<"idle" | "loading" | "ready" | "miss">("idle");
   const [forecast, setForecast] = useState<ForecastView | null>(null);
   const [forecastFailed, setForecastFailed] = useState(false);
   const [healthFailed, setHealthFailed] = useState(false);
@@ -1360,6 +1396,8 @@ export function ZonePage({ cityId, auth, login }: { cityId: string; auth: Auth |
   if (h3 !== shownH3) {
     setShownH3(h3);
     setZone(null);
+    setModel(null);
+    setModelState("idle");
     setBrief("");
     setForecast(null);
     setHealth(null);
@@ -1370,6 +1408,8 @@ export function ZonePage({ cityId, auth, login }: { cityId: string; auth: Auth |
   useEffect(() => {
     if (!h3) return;
     setZone(null);
+    setModel(null);
+    setModelState("idle");
     setZoneError(null);
     setSubscribed(false);
     setForecast(null);
@@ -1399,6 +1439,26 @@ export function ZonePage({ cityId, auth, login }: { cityId: string; auth: Auth |
     };
   }, [h3, cityId, lang, zoneAttempt]);
 
+  useEffect(() => {
+    const center = zone?.center;
+    if (!center) return;
+    let stop = false;
+    setModelState("loading");
+    fetch(`/api/v1/model/point?lat=${center.lat}&lng=${center.lng}`)
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error("model"))))
+      .then((body: ModelPoint) => {
+        if (stop) return;
+        setModel(body);
+        setModelState("ready");
+      })
+      .catch(() => {
+        if (!stop) setModelState("miss");
+      });
+    return () => {
+      stop = true;
+    };
+  }, [zone?.center?.lat, zone?.center?.lng]);
+
   if (h3 !== shownH3 || zoneError || !zone) {
     return (
       <div className="stack">
@@ -1410,18 +1470,27 @@ export function ZonePage({ cityId, auth, login }: { cityId: string; auth: Auth |
             <button type="button" onClick={() => setZoneAttempt((n) => n + 1)}>{retryLabel(lang)}</button>
           </div>
         ) : (
-          <Status>{t(lang, "loading")}</Status>
+          <HomeSkeleton />
         )}
       </div>
     );
   }
 
   const station = zone.nearestStation;
-  const distance =
-    zone.distanceKm == null
-      ? null
-      : `${station?.name ?? t(lang, "nearest")} · ${t(lang, "aqi")} ${station?.aqi ?? "—"} · ${zone.distanceKm.toFixed(1)} ${t(lang, "km")}${station?.sourceFeed ? ` · ${sourceLabel(lang, station.sourceFeed)}` : ""}`;
+  const published = zone.surface?.publishedAqi ?? station?.aqi ?? null;
+  const tone = aqiTone(published);
+  const modelAqi = model?.aqi ?? zone.surface?.modelAqi ?? null;
+  const modelTone = aqiTone(modelAqi);
+  const pollutants: Array<[string, number | null | undefined]> = [
+    [t(lang, "pollutantPm25"), model?.pm25],
+    [t(lang, "pollutantPm10"), model?.pm10],
+    [t(lang, "pollutantNo2"), model?.no2],
+    [t(lang, "pollutantOzone"), model?.ozone],
+    [t(lang, "pollutantSo2"), model?.so2],
+    [t(lang, "pollutantCo"), model?.co],
+  ];
   const upwind = (zone.incidents ?? []).flatMap((i) => i.upwind ?? []);
+  const far = Math.max(1, ...upwind.map((item) => item.distanceKm ?? 0));
   const advisory = zone.advisory;
   const missingSatellite = satelliteAbsent(zone) || satelliteAbsent(health);
 
@@ -1431,20 +1500,53 @@ export function ZonePage({ cityId, auth, login }: { cityId: string; auth: Auth |
         kicker={t(lang, "map")}
         title={station?.name ? t(lang, "areaNear", { name: station.name }) : t(lang, "thisArea")}
       />
+      <section className={`hero hero-${tone}`}>
+        <div className="hero-copy">
+          <div className="hero-figure">
+            {published != null ? <p className={`hero-aqi tone-${tone}`}>{Math.round(published)}</p> : null}
+            <div className="hero-aside">
+              <p className="hero-band">{t(lang, ({ good: "bandGood", sat: "bandSatisfactory", mod: "bandModerate", poor: "bandPoor", vp: "bandVeryPoor", severe: "bandSevere" } as Record<string, string>)[tone] ?? "bandUnknown")}</p>
+              {advisory?.band && ACTION_FROM_BAND[advisory.band] ? <p className="aqi-action">{t(lang, ACTION_FROM_BAND[advisory.band])}</p> : null}
+            </div>
+          </div>
+        </div>
+      </section>
+      <ul className="stat-strip">
+        <li>
+          <span className="stat-k">{t(lang, "nearest")}</span>
+          <strong className={`tone-${aqiTone(station?.aqi)}`}>{station?.aqi == null ? "—" : Math.round(station.aqi)}</strong>
+          <span className="muted">
+            {station?.name ?? t(lang, "noStation")}
+            {zone.distanceKm != null ? ` · ${zone.distanceKm.toFixed(1)} ${t(lang, "km")}` : ""}
+            {station?.sourceFeed ? ` · ${sourceLabel(lang, station.sourceFeed)}` : ""}
+          </span>
+        </li>
+        <li>
+          <span className="stat-k">{t(lang, "modelWord")}</span>
+          <strong className={`tone-${modelTone}`}>{modelState === "loading" ? "…" : modelAqi == null ? "—" : Math.round(modelAqi)}</strong>
+          <span className="muted">{model?.attribution ?? (modelState === "miss" ? missLabel(lang) : "Open-Meteo / CAMS")}</span>
+        </li>
+        <li>
+          <span className="stat-k">{t(lang, "hotspots")}</span>
+          <strong>{zone.incidents?.length ?? 0}</strong>
+          <span className="muted">{t(lang, "report")} {zone.openReports ?? 0}</span>
+        </li>
+      </ul>
+      {modelState === "ready" ? (
+        <ul className="pollutant-row">
+          {pollutants.map(([name, value]) => (
+            <li key={name}>
+              <span>{name}</span>
+              <strong>{value == null ? "—" : Math.round(value)}</strong>
+            </li>
+          ))}
+        </ul>
+      ) : null}
       <div className="card">
-        {zone.surface?.publishedAqi != null ? (
-          <p>
-            {t(lang, "aqi")} {Math.round(zone.surface.publishedAqi)}
-            {" · "}
-            {sourceLabel(lang, "gemini")} {zone.surface.modelAqi == null ? "—" : Math.round(zone.surface.modelAqi)}
-          </p>
+        {forecastFailed || healthFailed ? (
+          <p className="status">{`${station?.name ?? t(lang, "nearest")}: ${zoneUnconfirmed(lang)}`}</p>
         ) : null}
-        <p className={forecastFailed || healthFailed ? "status" : undefined}>
-          {forecastFailed || healthFailed
-            ? `${station?.name ?? t(lang, "nearest")}: ${zoneUnconfirmed(lang)}`
-            : `${t(lang, "nearest")}: ${distance ?? t(lang, "noStation")}`}
-        </p>
-        <p className="brief">{brief}</p>
+        {brief ? <p className="brief">{brief}</p> : null}
         <div className="row">
           {canSpeak && brief ? (
             <button
@@ -1470,7 +1572,13 @@ export function ZonePage({ cityId, auth, login }: { cityId: string; auth: Auth |
               disabled={subscribed}
               onClick={() => {
                 setActionError(null);
-                api.subscribe(auth, { h3, cityId, channels: ["in_app", "email"] }).then(() => setSubscribed(true)).catch(() => setActionError(missLabel(lang)));
+                api.subscribe(auth, { h3, cityId, channels: ["in_app", "email"] }).then(() => {
+                  setSubscribed(true);
+                  toast.success(t(lang, "subscribed"));
+                }).catch(() => {
+                  setActionError(missLabel(lang));
+                  toast.error(missLabel(lang));
+                });
               }}
             >
               {subscribed ? t(lang, "subscribed") : t(lang, "subscribe")}
@@ -1478,7 +1586,7 @@ export function ZonePage({ cityId, auth, login }: { cityId: string; auth: Auth |
           ) : (
             <div className="stack">
               <p className="muted">{t(lang, "signInToSubscribe")}</p>
-              <button type="button" onClick={() => login("resident@zephyr.local", false)}>{t(lang, "signInAction")}</button>
+              <button type="button" onClick={() => window.dispatchEvent(new Event("zephyr-signin"))}>{t(lang, "signInAction")}</button>
             </div>
           )}
         </div>
@@ -1515,11 +1623,18 @@ export function ZonePage({ cityId, auth, login }: { cityId: string; auth: Auth |
       <div className="card">
         <h3>{t(lang, "upwind")}</h3>
         {upwind.length ? (
-          <ul className="facts">
+          <ol className="upwind-list">
             {upwind.map((item, i) => (
-              <li key={`${item.id ?? item.name ?? "src"}-${i}`}>{upwindLabel(item, lang)}</li>
+              <li key={`${item.id ?? item.name ?? "src"}-${i}`}>
+                <div className="ward-row">
+                  <span className="ward-name">{upwindLabel(item, lang)}</span>
+                </div>
+                <div className="ward-track" aria-hidden="true">
+                  <span className="ward-fill fill-mod" style={{ width: `${Math.max(8, ((item.distanceKm ?? 0) / far) * 100)}%` }} />
+                </div>
+              </li>
             ))}
-          </ul>
+          </ol>
         ) : (
           <p className="muted">—</p>
         )}
@@ -1529,14 +1644,14 @@ export function ZonePage({ cityId, auth, login }: { cityId: string; auth: Auth |
           <h3>
             {advisory.band ? `${t(lang, "groupAdvisory")} · ${bandText(lang, advisory.band)}` : t(lang, "groupAdvisory")}
           </h3>
-          {advisory.band && ACTION_FROM_BAND[advisory.band] ? <p>{t(lang, ACTION_FROM_BAND[advisory.band])}</p> : null}
-          <ul className="facts">
+          <div className="advice-grid">
             {Object.entries(advisory.groups ?? {}).map(([k, v]) => (
-              <li key={k}>
-                {groupLabel(lang, k)}: {groupAdvice(lang, advisory.band ?? "", k, String(v ?? ""))}
-              </li>
+              <article key={k}>
+                <h4>{groupLabel(lang, k)}</h4>
+                <p>{groupAdvice(lang, advisory.band ?? "", k, String(v ?? ""))}</p>
+              </article>
             ))}
-          </ul>
+          </div>
           {advisory.attribution ? <p className="muted">{advisoryNote(lang, advisory.attribution)}</p> : null}
         </div>
       ) : null}
@@ -1560,7 +1675,6 @@ export function DiaryPage({
   cityId,
   cities,
   auth,
-  login,
 }: {
   cityId: string;
   cities: City[];
@@ -1596,7 +1710,7 @@ export function DiaryPage({
         <PageHead kicker={city?.name ?? ""} title={t(lang, "diary")} />
         <div className="card diary-gate">
           <p>{t(lang, "signInDiary")}</p>
-          <button type="button" onClick={() => login("resident@zephyr.local", false)}>
+          <button type="button" onClick={() => window.dispatchEvent(new Event("zephyr-signin"))}>
             {t(lang, "signInAction")}
           </button>
         </div>
@@ -1657,7 +1771,7 @@ export function DiaryPage({
       </div>
       {geoFailed ? <p className="error">{t(lang, "locationFailed")}</p> : null}
       <div className="card">
-        {diaryState === "loading" ? <Status>{t(lang, "loading")}</Status> : diaryState === "error" ? (
+        {diaryState === "loading" ? <PanelSkeleton /> : diaryState === "error" ? (
           <p className="error">
             {missLabel(lang)}{" "}
             <button type="button" onClick={() => setDiaryAttempt((n) => n + 1)}>{retryLabel(lang)}</button>
@@ -1858,7 +1972,7 @@ export function OperatorPage({
         </div>
       </PageHead>
       <div className="card">
-        {queueState === "loading" ? <Status>{t(lang, "loading")}</Status> : null}
+        {queueState === "loading" ? <PanelSkeleton /> : null}
         {queueError ? (
           <p className={queueState === "ready" ? "muted" : "error"}>
             {queueState === "ready" ? (QUEUE_STALE[lang] ?? QUEUE_STALE.en) : missLabel(lang)}{" "}
@@ -2250,7 +2364,7 @@ export function PipelinePage({
           </div>
         </div>
       ) : null}
-      {pipeState === "loading" ? <Status>{t(lang, "loading")}</Status> : null}
+      {pipeState === "loading" ? <PanelSkeleton /> : null}
       {pipeState === "error" ? (
         <p className="error">
           {pipeError && pipeError !== "failed" ? `${ingestFail(lang)}: ${pipeError}` : ingestFail(lang)}{" "}

@@ -6,7 +6,7 @@ import { useLang } from "./lang";
 import { sourceLabel } from "./flows";
 import { medicalLink, medicalNote } from "./legal";
 import { retryLabel } from "./mapStyle";
-import { AqiDial, aqiTone, formatWhen, PageHead, Status } from "./uiBits";
+import { AqiDial, aqiTone, formatWhen, HomeSkeleton, PageHead } from "./uiBits";
 import "./home.css";
 
 const BAND_KEY: Record<string, string> = {
@@ -212,6 +212,30 @@ function sameWardNames(
   return true;
 }
 
+function compact(n: number | null | undefined, lang: string): string {
+  if (n == null || Number.isNaN(n)) return "—";
+  return new Intl.NumberFormat(lang, { notation: "compact", maximumFractionDigits: 1 }).format(n);
+}
+
+function Spread({ p10, p90, mid }: { p10: number | null; p90: number | null; mid: number | null }) {
+  const top = Math.max(p10 ?? 0, p90 ?? 0, mid ?? 0, 1);
+  const at = (n: number | null) => (n == null ? null : `${Math.min(100, (n / top) * 100)}%`);
+  const left = at(p10);
+  const right = at(p90);
+  return (
+    <div className="spread">
+      <div className="spread-track">
+        {left && right ? <span className="spread-range" style={{ left, width: `max(4px, calc(${right} - ${left}))` }} /> : null}
+        {at(mid) ? <span className="spread-mark" style={{ left: at(mid)! }} /> : null}
+      </div>
+      <div className="spread-labels">
+        <span>p10 {p10 == null ? "—" : Math.round(p10)}</span>
+        <span>p90 {p90 == null ? "—" : Math.round(p90)}</span>
+      </div>
+    </div>
+  );
+}
+
 function WardBoard({ title, wards, lang, stale }: { title: string; wards: Array<{ name: string; aqi: number }>; lang: string; stale: boolean }) {
   const max = Math.max(1, ...wards.map((ward) => ward.aqi));
   return (
@@ -305,7 +329,7 @@ export function Home({ cityId, cityName }: { cityId: string; cityName: string })
             </div>
           </div>
         ) : (
-          <Status>{t(lang, "loading")}</Status>
+          <HomeSkeleton />
         )}
       </div>
     );
@@ -329,7 +353,7 @@ export function Home({ cityId, cityName }: { cityId: string; cityName: string })
         <div className="hero-copy">
           <div className="hero-figure">
             {shownAqi != null ? <p className={`hero-aqi tone-${tone}`}>{shownAqi}</p> : null}
-            <div>
+            <div className="hero-aside">
               <p className="hero-band">{band}</p>
               {action ? <p className="aqi-action">{t(lang, action)}</p> : null}
               <p className="muted medical-note">
@@ -364,11 +388,39 @@ export function Home({ cityId, cityName }: { cityId: string; cityName: string })
       </section>
       <ul className="stat-strip">
         <li>
+          <span className="stat-k">{t(lang, "live")}</span>
+          <strong>{current.liveStationCount}</strong>
+          <span className="muted">{t(lang, "offline")} {current.offlineStationCount}</span>
+        </li>
+        <li>
           <span className="stat-k">{t(lang, "hotspots")}</span>
           <strong>{current.openIncidentCount}</strong>
           <Link to="/map">{t(lang, "openMap")}</Link>
         </li>
+        {current.peopleInPoor != null ? (
+          <li>
+            <span className="stat-k">{t(lang, "people")}</span>
+            <strong>{compact(current.peopleInPoor, lang)}</strong>
+            {current.shareInPoor != null ? (
+              <span className="muted">{t(lang, "shareOf", { share: `${Math.round(current.shareInPoor * 100)}%` })}</span>
+            ) : null}
+          </li>
+        ) : null}
+        {current.equity.ratio != null || current.uncoveredPopulation != null ? (
+          <li>
+            <span className="stat-k">{t(lang, "equity")}</span>
+            <strong>{current.equity.ratio == null ? "—" : current.equity.ratio.toFixed(1)}</strong>
+            <span className="muted">{t(lang, "uncovered", { n: compact(current.uncoveredPopulation, lang) })}</span>
+          </li>
+        ) : null}
       </ul>
+      {current.equity.p10 != null || current.equity.p90 != null ? (
+        <section className="card spread-card">
+          <h2>{t(lang, "equityRatio")}</h2>
+          <Spread p10={current.equity.p10} p90={current.equity.p90} mid={current.cityAqi} />
+          <p className="muted">{t(lang, "equityNote")}</p>
+        </section>
+      ) : null}
       <div className="grid">
         {oneList ? (
           <WardBoard title={t(lang, "monitoredWards")} wards={monitoredRows} lang={lang} stale={stale} />

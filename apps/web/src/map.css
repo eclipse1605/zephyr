@@ -10,13 +10,14 @@
   z-index: 3;
   top: 12px;
   left: 12px;
-  right: auto;
-  max-width: min(420px, calc(100% - 72px));
+  right: 64px;
+  max-width: none;
   pointer-events: none;
 }
 
 .map-toolbar .head-actions {
   pointer-events: auto;
+  flex-wrap: wrap;
   box-shadow: 0 8px 24px color-mix(in srgb, #000 18%, transparent);
   backdrop-filter: blur(10px);
   background: color-mix(in srgb, var(--surface) 92%, transparent);
@@ -30,6 +31,11 @@
   background: #0b1218;
 }
 
+#map.is-gesturing .maplibregl-marker,
+#map.is-gesturing .wind-field {
+  visibility: hidden;
+}
+
 .map-frame .wind-field {
   transition: opacity 120ms linear;
   will-change: opacity;
@@ -38,7 +44,7 @@
 .map-note {
   position: absolute;
   z-index: 2;
-  top: 58px;
+  top: 112px;
   left: 12px;
   right: auto;
   max-width: min(420px, calc(100% - 24px));
@@ -60,7 +66,7 @@
   z-index: 2;
   left: 12px;
   right: auto;
-  bottom: 12px;
+  bottom: 36px;
   max-width: min(640px, calc(100% - 72px));
   margin: 0;
   padding: 8px 10px;
@@ -76,7 +82,7 @@
   backdrop-filter: blur(10px);
   font: 600 12px/1.3 var(--sans);
   pointer-events: none;
-  max-height: 38%;
+  max-height: 30%;
   overflow: auto;
 }
 
@@ -155,18 +161,19 @@ button.pin {
 .map-sources {
   position: absolute;
   z-index: 2;
-  top: 12px;
-  right: 56px;
-  left: auto;
+  top: 62px;
+  left: 12px;
+  right: 64px;
   margin: 0;
-  max-width: min(220px, calc(100% - 300px));
+  max-width: none;
   padding: 6px 8px;
   border-radius: 8px;
   background: color-mix(in srgb, var(--surface) 78%, transparent);
   backdrop-filter: blur(8px);
   font-size: 11px;
   line-height: 1.35;
-  text-align: end;
+  text-align: start;
+  overflow-wrap: anywhere;
   pointer-events: none;
 }
 
@@ -175,6 +182,9 @@ button.pin.station,
   color: #081018;
   border-radius: 999px;
   padding: 3px 7px;
+  min-width: 24px;
+  min-height: 24px;
+  font-variant-numeric: tabular-nums;
   font-weight: 800;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.55);
   text-shadow: 0 1px 0 rgba(255, 255, 255, 0.35);
@@ -317,14 +327,13 @@ button.pin.station.is-stale:active,
   }
 
   .map-sources {
-    top: auto;
-    right: 12px;
-    left: auto;
-    max-width: min(200px, 46vw);
-    text-align: end;
+    top: 108px;
+    right: 56px;
+    left: 12px;
+    max-width: none;
+    text-align: start;
     font-size: 10px;
-    /* Sit above the legend, clear of attribution. */
-    bottom: 64px;
+    bottom: auto;
   }
 
   .map-legend {
@@ -334,6 +343,50 @@ button.pin.station.is-stale:active,
   }
 
   .map-toolbar {
-    max-width: min(320px, calc(100% - 64px));
+    right: 56px;
+    max-width: none;
   }
 }
+
+/* Station hover / tap card */
+.station-card .maplibregl-popup-content {
+  padding: 10px 12px;
+  min-width: 190px;
+  max-width: 260px;
+  font: 13px/1.35 var(--sans, system-ui, sans-serif);
+  overflow-wrap: anywhere;
+}
+.station-card.is-hover { pointer-events: none; }
+.station-card.is-hover .sc-link { display: none; }
+.sc-head { display: flex; align-items: center; gap: 10px; }
+.sc-title { display: flex; flex-direction: column; min-width: 0; }
+.sc-title strong { font-size: 13px; line-height: 1.25; }
+.sc-title small { color: var(--muted, #8b98a5); font-size: 11px; }
+.sc-aqi {
+  flex: none;
+  min-width: 44px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  text-align: center;
+  font: 700 15px/1.1 var(--mono, monospace);
+  color: #081018;
+  background: #d9ddd4;
+}
+.sc-aqi.tone-good,
+.sc-aqi.tone-sat,
+.sc-aqi.tone-mod,
+.sc-aqi.tone-poor,
+.sc-aqi.tone-vp,
+.sc-aqi.is-offline { color: #081018; }
+.sc-aqi.tone-good { background: #3dd68c; }
+.sc-aqi.tone-sat { background: #b6e36a; }
+.sc-aqi.tone-mod { background: #ffd666; }
+.sc-aqi.tone-poor { background: #f5a524; }
+.sc-aqi.tone-vp { background: #ff8a4a; }
+.sc-aqi.tone-severe { background: #d64532; color: #fff; }
+.sc-aqi.is-offline { font-size: 11px; background: #d9ddd4; }
+.sc-band { margin-top: 6px; font-weight: 600; }
+.sc-meta, .sc-stale { margin-top: 3px; font-size: 11px; color: var(--muted, #8b98a5); }
+.sc-stale { color: #ffb454; }
+.sc-link { display: inline-block; margin-top: 6px; color: var(--accent, #3dd6a4); font-weight: 600; text-decoration: none; }
+.sc-link:hover { text-decoration: underline; }

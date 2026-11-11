@@ -14,16 +14,13 @@ import "./map.css";
 const OFFLINE_ZOOM = 12;
 const LABEL_ZOOM = 6.2;
 /** Below this, station pins add noise on the globe — haze + field carry the signal. */
-const STATION_ZOOM = 4.5;
+const STATION_ZOOM = 1.2;
 const SURFACE_ZOOM = 7.5;
-const NEAR_PX = 40;
 const MOVE_DEBOUNCE_MS = 180;
 const BOUNDS_PAD = 0.08;
 const MARKER_CAP = 500;
 /** Cap pairwise clustering work so dense live feeds stay cheap. */
-const OFFSET_CAP = 80;
-
-type Place = (el: HTMLElement, lng: number, lat: number, popup?: string, offset?: [number, number]) => void;
+type Place = (el: HTMLElement, lng: number, lat: number, popup?: string, hover?: boolean) => void;
 
 type LegendCounts = {
   live: number;
@@ -71,7 +68,14 @@ const PARTIAL_NOTE: Record<string, string> = {
   pt: "Algumas camadas não carregaram",
 };
 
-const SOURCE_LINE = "Color field: Open-Meteo / CAMS model. Pins: OpenAQ & CPCB (stored); WAQI live only.";
+const BAND_KEY: Record<string, "bandGood" | "bandSatisfactory" | "bandModerate" | "bandPoor" | "bandVeryPoor" | "bandSevere"> = {
+  good: "bandGood",
+  sat: "bandSatisfactory",
+  mod: "bandModerate",
+  poor: "bandPoor",
+  vp: "bandVeryPoor",
+  severe: "bandSevere",
+};
 
 function layerName(lang: string, id: "stations" | "wards" | "fires"): string {
   return LAYER_NAME[id][lang] ?? LAYER_NAME[id].en;
@@ -180,48 +184,6 @@ function readingIsOld(iso: string | null | undefined): boolean {
   const at = Date.parse(iso);
   if (Number.isNaN(at)) return false;
   return Date.now() - at > 3 * 60 * 60 * 1000;
-}
-
-function ringOffset(index: number, count: number): [number, number] {
-  if (count < 2) return [0, 0];
-  const radius = count > 4 ? 10 * count : 28;
-  const theta = (2 * Math.PI * index) / count;
-  return [radius * Math.sin(theta), -radius * Math.cos(theta)];
-}
-
-function liveOffsets(map: MapLibre.Map, stations: Station[]): Map<Station, [number, number]> {
-  const live = stations.filter((station) => !isOffline(station)).slice(0, OFFSET_CAP);
-  const points = live.map((station) => map.project([station.lng, station.lat]));
-  const parent = live.map((_, index) => index);
-  const find = (index: number) => {
-    let root = index;
-    while (parent[root] !== root) root = parent[root];
-    return root;
-  };
-  for (let i = 0; i < live.length; i++) {
-    for (let j = i + 1; j < live.length; j++) {
-      const dx = points[i].x - points[j].x;
-      const dy = points[i].y - points[j].y;
-      if (Math.hypot(dx, dy) > NEAR_PX) continue;
-      const left = find(i);
-      const right = find(j);
-      if (left !== right) parent[right] = left;
-    }
-  }
-  const groups = new Map<number, number[]>();
-  live.forEach((_, index) => {
-    const root = find(index);
-    const members = groups.get(root);
-    if (members) members.push(index);
-    else groups.set(root, [index]);
-  });
-  const offsets = new Map<Station, [number, number]>();
-  for (const members of groups.values()) {
-    members.forEach((stationIndex, ringIndex) => {
-      offsets.set(live[stationIndex], ringOffset(ringIndex, members.length));
-    });
-  }
-  return offsets;
 }
 
 function incidentPoint(station: Station): MapIncident | null {
@@ -356,10 +318,8 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
         if (!alive) return;
         try {
           const layer = rasterRef.current;
-          // Globe/continent: overzoom a coarse maxzoom so GPU linear filtering hides seams.
-          // City zoom: swap to detail. Never stack both at once (that caused hard rectangles).
-          const tileUrl = `/api/v1/model/tiles/${layer}/{z}/{x}/{y}?v=16&m=8`;
-          // Drop stale sources from earlier HMR sessions.
+          // One world image at every zoom. Per-tile rasters drew a single hard square
+          // wherever one tile had loaded and left the rest of the earth empty.
           for (const id of ["model-raster", "model-raster-base", "model-field", "aqi-haze"] as const) {
             if (modelMap.getLayer(id)) modelMap.removeLayer(id);
             if (modelMap.getSource(id)) modelMap.removeSource(id);
@@ -382,7 +342,7 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
           if (!modelMap.getSource("model-field")) {
             modelMap.addSource("model-field", {
               type: "image",
-              url: `/api/v1/model/field/${layer}?z=${fz}&x0=${fx0}&x1=${fx1}&y0=${fy0}&y1=${fy1}&v=20`,
+              url: `/api/v1/model/field/${layer}?z=${fz}&x0=${fx0}&x1=${fx1}&y0=${fy0}&y1=${fy1}&v=23`,
               coordinates: [
                 [west, north],
                 [east, north],
@@ -395,43 +355,8 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
               type: "raster",
               source: "model-field",
               paint: {
-                "raster-opacity": [
-                  "interpolate",
-                  ["linear"],
-                  ["zoom"],
-                  3.8,
-                  0.5,
-                  4.4,
-                  0,
-                ],
-                "raster-fade-duration": 280,
-                "raster-resampling": "linear",
-              },
-            });
-          }
-          if (!modelMap.getSource("model-raster")) {
-            modelMap.addSource("model-raster", {
-              type: "raster",
-              tiles: [tileUrl],
-              tileSize: 256,
-              maxzoom: 8,
-              attribution: "Open-Meteo / CAMS",
-            });
-            modelMap.addLayer({
-              id: "model-raster",
-              type: "raster",
-              source: "model-raster",
-              paint: {
-                "raster-opacity": [
-                  "interpolate",
-                  ["linear"],
-                  ["zoom"],
-                  3.8,
-                  0,
-                  4.4,
-                  0.48,
-                ],
-                "raster-fade-duration": 280,
+                "raster-opacity": 0.62,
+                "raster-fade-duration": 0,
                 "raster-resampling": "linear",
               },
             });
@@ -469,6 +394,23 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
         addRaster();
         openEpoch();
       });
+      const overlayIds = ["model-field", "model-raster", "aqi-haze"];
+      const hideOverlays = () => {
+        modelMap.getContainer().classList.add("is-gesturing");
+        for (const id of overlayIds) {
+          if (modelMap.getLayer(id)) modelMap.setLayoutProperty(id, "visibility", "none");
+        }
+      };
+      const showOverlays = () => {
+        modelMap.getContainer().classList.remove("is-gesturing");
+        for (const id of overlayIds) {
+          if (modelMap.getLayer(id)) modelMap.setLayoutProperty(id, "visibility", "visible");
+        }
+      };
+      modelMap.on("movestart", hideOverlays);
+      modelMap.on("zoomstart", hideOverlays);
+      modelMap.on("moveend", showOverlays);
+      modelMap.on("zoomend", showOverlays);
       map.on("click", (event) => {
         const target = event.originalEvent.target;
         if (target instanceof Element && target.closest(".maplibregl-marker")) return;
@@ -490,7 +432,7 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
               value == null ? "" : `<br/>${label} ${Math.round(value)} ${unit}`;
             new maplibregl.Popup({ offset: 12 })
               .setLngLat(event.lngLat)
-              .setHTML(`<strong>Model</strong><br/>US AQI ${point.aqi ?? "—"}${line("PM2.5", point.pm25)}${line("PM10", point.pm10)}${line("NO2", point.no2)}${line("Ozone", point.ozone)}${line("SO2", point.so2)}${line("CO", point.co)}<br/>${point.attribution ?? "Open-Meteo / CAMS"}<br/>${point.note ?? ""}`)
+              .setHTML(`<strong>${esc(t(lang, "modelWord"))}</strong><br/>${esc(t(lang, "layerAqi"))} ${point.aqi ?? "—"}${line(t(lang, "pollutantPm25"), point.pm25)}${line(t(lang, "pollutantPm10"), point.pm10)}${line(t(lang, "pollutantNo2"), point.no2)}${line(t(lang, "pollutantOzone"), point.ozone)}${line(t(lang, "pollutantSo2"), point.so2)}${line(t(lang, "pollutantCo"), point.co)}<br/>${point.attribution ?? "Open-Meteo / CAMS"}<br/>${point.note ?? ""}`)
               .addTo(modelMap);
           })
           .catch(() => undefined);
@@ -581,7 +523,7 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
     source?.setTiles?.([`/api/v1/model/tiles/${raster}/{z}/{x}/{y}?v=16&m=8`]);
     const field = map?.getSource("model-field") as { updateImage?: (opts: { url: string }) => void } | undefined;
     field?.updateImage?.({
-      url: `/api/v1/model/field/${raster}?z=2&x0=0&x1=3&y0=0&y1=3&v=20`,
+      url: `/api/v1/model/field/${raster}?z=2&x0=0&x1=3&y0=0&y1=3&v=23`,
     });
   }, [raster, mapEpoch]);
 
@@ -604,10 +546,17 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
     let debounce = 0;
     setMapNote("loading");
 
-    const place: Place = (el, lng, lat, popup, offset) => {
-      const marker = new maplibregl.Marker({ element: el, offset: offset ?? [0, 0] }).setLngLat([lng, lat]);
+    const place: Place = (el, lng, lat, popup, hover) => {
+      const marker = new maplibregl.Marker({ element: el }).setLngLat([lng, lat]);
       if (popup) {
-        const popupObj = new maplibregl.Popup({ offset: 12 }).setHTML(popup);
+        const useHover = hover && window.matchMedia("(hover: hover)").matches;
+        const popupObj = new maplibregl.Popup({
+          offset: 14,
+          closeButton: false,
+          closeOnClick: false,
+          maxWidth: "260px",
+          className: useHover ? "station-card is-hover" : "station-card",
+        }).setHTML(popup);
         popupObj.on("open", () => {
           popupObj.getElement()?.querySelectorAll<HTMLAnchorElement>("a[href^='/zones/']").forEach((link) => {
             link.addEventListener("click", (event) => {
@@ -617,7 +566,12 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
             });
           });
         });
-        marker.setPopup(popupObj);
+        if (useHover) {
+          el.addEventListener("mouseenter", () => popupObj.setLngLat([lng, lat]).addTo(map));
+          el.addEventListener("mouseleave", () => popupObj.remove());
+        } else {
+          marker.setPopup(popupObj);
+        }
       }
       marker.addTo(map);
       markers.current.push(marker);
@@ -636,7 +590,6 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
         lat >= box.south && lat <= box.north && lng >= box.west && lng <= box.east;
       const viewStations = data.stations.filter((s) => inView(s.lat, s.lng));
       const seen = new Set<string>();
-      const offsets = showLabels ? liveOffsets(map, viewStations) : new Map<Station, [number, number]>();
       let liveCount = 0;
       let offlineCount = 0;
       let uncoveredCount = 0;
@@ -672,12 +625,29 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
           el.setAttribute("aria-label", readingsStale ? `${s.name} ${rounded}. ${staleLive(lang)}` : `${s.name} ${rounded}`);
         }
         const cell = s.h3 || latLngToCell(s.lat, s.lng, 8);
-        const zone = `<br/><a href="/zones/${esc(cell)}">${esc(t(lang, "zoneLink"))}</a>`;
+        const zone = `<a class="sc-link" href="/zones/${esc(cell)}">${esc(t(lang, "zoneLink"))}</a>`;
         const aqiText = offline ? esc(t(lang, "offline")) : String(Math.round(s.aqi ?? 0));
-        const staleLine = readingsStale ? `<br/>${esc(staleLive(lang))}` : "";
-        const sourceLine = s.sourceFeed ? `<br/>${esc(sourceLabel(lang, s.sourceFeed))}` : "";
-        const popup = `<strong>${esc(s.name)}</strong><br/>${esc(t(lang, "aqi"))} ${aqiText}${sourceLine}${staleLine}${zone}`;
-        place(el, s.lng, s.lat, popup, offline || !showLabels ? undefined : offsets.get(s));
+        const bandKey = BAND_KEY[aqiTone(s.aqi)];
+        const bandText = !offline && bandKey ? esc(t(lang, bandKey)) : "";
+        const cityName = cities.find((city) => city.id === s.cityId)?.name ?? s.cityId ?? "";
+        const stale = readingsStale || readingIsOld(s.lastSeen);
+        const metaBits = [
+          s.sourceFeed ? esc(sourceLabel(lang, s.sourceFeed)) : "",
+          s.lastSeen ? esc(new Date(s.lastSeen).toLocaleString(lang, { dateStyle: "medium", timeStyle: "short" })) : "",
+        ].filter(Boolean);
+        const popup =
+          `<div class="sc-head"><span class="sc-aqi tone-${aqiTone(s.aqi)}${offline ? " is-offline" : ""}">${aqiText}</span>` +
+          `<span class="sc-title"><strong>${esc(s.name)}</strong>${cityName ? `<small>${esc(cityName)}</small>` : ""}</span></div>` +
+          (bandText ? `<div class="sc-band">${esc(t(lang, "aqi"))} · ${bandText}</div>` : "") +
+          (metaBits.length ? `<div class="sc-meta">${metaBits.join(" · ")}</div>` : "") +
+          (stale ? `<div class="sc-stale">${esc(staleLive(lang))}</div>` : "") +
+          zone;
+        el.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          navigate(`/zones/${cell}`);
+        });
+        place(el, s.lng, s.lat, popup, true);
         const incident = incidentPoint(s);
         if (incident) placeIncident(place, incident, s.lng, s.lat, lang, navigate, seen);
       }
@@ -835,11 +805,11 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
       <div className="map-frame">
         <div className="map-toolbar" role="toolbar" aria-label={t(lang, "map")}>
           <div className="row head-actions">
-            <button type="button" onClick={() => setRaster((layer) => (layer === "aqi" ? "pm25" : "aqi"))}>
-              {raster === "aqi" ? "US AQI" : "PM2.5"}
+            <button type="button" aria-pressed={raster === "pm25"} onClick={() => setRaster((layer) => (layer === "aqi" ? "pm25" : "aqi"))}>
+              {raster === "aqi" ? t(lang, "layerAqi") : t(lang, "layerPm25")}
             </button>
             <button type="button" aria-pressed={windOn} onClick={() => setWindOn((on) => !on)}>
-              {windOn ? "Wind on" : "Wind off"}
+              {windOn ? t(lang, "windOn") : t(lang, "windOff")}
             </button>
             <button type="button" aria-pressed={pitched} onClick={() => setPitched((v) => !v)}>
               {pitched ? t(lang, "flat") : t(lang, "buildings")}
@@ -847,7 +817,10 @@ export function MapPage({ cityId, cities }: { cityId: string; cities: City[] }) 
           </div>
         </div>
         <div id="map" ref={mapRef} />
-        <p className="muted map-sources">{SOURCE_LINE}</p>
+        <p className="muted map-sources">
+          {t(lang, "modelSource")}{" "}
+          {raster === "aqi" ? t(lang, "layerAqi") : `${t(lang, "layerPm25")} µg/m³`}
+        </p>
         {mapNote ? (
           <div className="map-note" role="status">
             {mapNote === "loading" ? t(lang, "loading") : (

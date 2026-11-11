@@ -1,7 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile, rename, readdir, unlink, stat } from "node:fs/promises";
-import path from "node:path";
-import { containedPhotoPath } from "./uploads.js";
+import type { ObjectStore } from "./objectStore.js";
+import type { CollectionName } from "./schema.js";
 import type {
   DataMode,
   IncidentStatus,
@@ -266,164 +265,58 @@ export const emptyDb = (): Db => ({
   ingestJobs: {},
 });
 
-export class FileStore {
-  constructor(private root: string) {}
-
-  private dbPath() {
-    return path.join(this.root, "db.json");
+export class StoreConflictError extends Error {
+  constructor() {
+    super("store_conflict");
+    this.name = "StoreConflictError";
   }
+}
 
-  async ensure() {
-    await mkdir(this.root, { recursive: true });
-    await mkdir(path.join(this.root, "photos"), { recursive: true });
-    await mkdir(path.join(this.root, "voice"), { recursive: true });
-    try {
-      await readFile(this.dbPath(), "utf8");
-    } catch {
-      await writeFile(this.dbPath(), JSON.stringify(emptyDb(), null, 2));
-    }
-  }
+export type ReadScope = {
+  only?: CollectionName[];
+  cityId?: string;
+};
 
-  async read(): Promise<Db> {
-    await this.ensure();
-    const raw = await readFile(this.dbPath(), "utf8");
-    const parsed = JSON.parse(raw) as Partial<Db>;
-    const base = emptyDb();
-    const fileReports = await this.readReportsFile();
-    return {
-      ...base,
-      ...parsed,
-      reports: { ...(parsed.reports ?? {}), ...fileReports },
-      ingest: { ...base.ingest, ...parsed.ingest },
-      config: { ...base.config, ...parsed.config },
-      satelliteCells: parsed.satelliteCells ?? {},
-      fires: parsed.fires ?? [],
-      osmPlaces: parsed.osmPlaces ?? {},
-      pendingTasks: parsed.pendingTasks ?? [],
-      modelledHistory: parsed.modelledHistory ?? [],
-      sensorStreak: parsed.sensorStreak ?? {},
-      users: parsed.users ?? {},
-      surfaceCells: parsed.surfaceCells ?? {},
-      ingestJobs: parsed.ingestJobs ?? {},
-    };
-  }
+export type BBox = { west: number; south: number; east: number; north: number };
 
-  private reportsPath() {
-    return path.join(this.root, "reports.json");
-  }
+export interface Store {
+  ensure(): Promise<void>;
+  read(scope?: ReadScope): Promise<Db>;
+  write(db: Db): Promise<void>;
+  update(fn: (db: Db) => void | Promise<void>, scope?: ReadScope): Promise<Db>;
+  saveReport(report: StoredReport): Promise<void>;
+  pushPendingMessage(message: { id: string; type: string; body: unknown }): Promise<void>;
+  savePhoto(reportId: string, bytes: Buffer): Promise<string>;
+  photoExists(reportId: string): Promise<boolean>;
+  readPhoto(reportId: string): Promise<Buffer>;
+  deleteStalePhotos(maxAgeMs: number): Promise<void>;
+  objects: ObjectStore;
+  stationsInBounds(box: BBox): Promise<StoredStation[]>;
+  stationsByCity(cityId: string): Promise<StoredStation[]>;
+  claimNextIngestJob(owner: string, leaseMs: number, now?: Date): Promise<IngestJob | null>;
+  recentHourly(stationId: string, hours: number, now?: Date): Promise<HourlyReading[]>;
+  purgeExpired(now?: Date): Promise<void>;
+  close?(): Promise<void>;
+}
 
-  private async readReportsFile(): Promise<Record<string, StoredReport>> {
-    try {
-      return JSON.parse(await readFile(this.reportsPath(), "utf8")) as Record<string, StoredReport>;
-    } catch {
-      return {};
-    }
-  }
+const memorySingletons = new Map<string, Store>();
 
-  private async writeReportsFile(reports: Record<string, StoredReport>) {
-    await mkdir(this.root, { recursive: true });
-    const target = this.reportsPath();
-    const tmp = `${target}.${process.pid}.${Date.now()}.tmp`;
-    try {
-      await writeFile(tmp, JSON.stringify(reports));
-      await rename(tmp, target);
-    } catch (err) {
-      await unlink(tmp).catch(() => {});
-      throw err;
-    }
+export async function openStore(): Promise<Store> {
+  if (process.env.ZEPHYR_TEST_MEMORY === "1") {
+    const existing = memorySingletons.get("test");
+    if (existing) return existing;
+    const { MemoryStore } = await import("./memoryStore.js");
+    const store = new MemoryStore();
+    await store.ensure();
+    memorySingletons.set("test", store);
+    return store;
   }
-
-  async write(db: Db) {
-    await mkdir(this.root, { recursive: true });
-    const target = this.dbPath();
-    const tmp = `${target}.${process.pid}.${Date.now()}.tmp`;
-    try {
-      await writeFile(tmp, JSON.stringify(db, null, 2));
-      await rename(tmp, target);
-      await this.writeReportsFile(db.reports);
-    } catch (err) {
-      await unlink(tmp).catch(() => {});
-      throw err;
-    }
-  }
-
-  async update(fn: (db: Db) => void | Promise<void>): Promise<Db> {
-    const db = await this.read();
-    await fn(db);
-    await this.write(db);
-    return db;
-  }
-
-  /** Persist one report without rewriting stations, wards, or other collections. */
-  async saveReport(report: StoredReport): Promise<void> {
-    await this.ensure();
-    const reports = await this.readReportsFile();
-    if (Object.keys(reports).length === 0) {
-      try {
-        const raw = JSON.parse(await readFile(this.dbPath(), "utf8")) as Partial<Db>;
-        Object.assign(reports, raw.reports ?? {});
-      } catch {
-        // empty store
-      }
-    }
-    reports[report.id] = report;
-    await this.writeReportsFile(reports);
-  }
-
-  async pushPendingMessage(message: { id: string; type: string; body: unknown }): Promise<void> {
-    await this.ensure();
-    const raw = JSON.parse(await readFile(this.dbPath(), "utf8")) as Partial<Db>;
-    const pending = [...(raw.pendingMessages ?? []), message];
-    const target = this.dbPath();
-    const tmp = `${target}.${process.pid}.${Date.now()}.tmp`;
-    try {
-      await writeFile(tmp, JSON.stringify({ ...raw, pendingMessages: pending }, null, 2));
-      await rename(tmp, target);
-    } catch (err) {
-      await unlink(tmp).catch(() => {});
-      throw err;
-    }
-  }
-
-  photoPath(reportId: string) {
-    return containedPhotoPath(this.root, reportId);
-  }
-
-  async savePhoto(reportId: string, bytes: Buffer) {
-    await this.ensure();
-    const p = this.photoPath(reportId);
-    await mkdir(path.dirname(p), { recursive: true });
-    await writeFile(p, bytes);
-    return p;
-  }
-
-  async photoExists(reportId: string) {
-    try {
-      const s = await stat(this.photoPath(reportId));
-      return s.isFile() && s.size > 0 && s.size <= 5 * 1024 * 1024;
-    } catch {
-      return false;
-    }
-  }
-
-  async readPhoto(reportId: string) {
-    return readFile(this.photoPath(reportId));
-  }
-
-  async deleteStalePhotos(maxAgeMs: number) {
-    const dir = path.join(this.root, "photos");
-    await mkdir(dir, { recursive: true });
-    const names = await readdir(dir);
-    const now = Date.now();
-    const db = await this.read();
-    for (const name of names) {
-      const committed = Object.values(db.reports).some((r) => r.id === name && r.status !== "pending_upload");
-      if (committed) continue;
-      const p = path.join(dir, name);
-      const s = await stat(p);
-      if (now - s.mtimeMs > maxAgeMs) await unlink(p);
-    }
-  }
+  const url = process.env.DATABASE_URL?.trim();
+  if (!url) throw new Error("DATABASE_URL is required (run: docker compose up -d postgres minio)");
+  const { PostgresStore } = await import("./pgStore.js");
+  const store = new PostgresStore();
+  await store.ensure();
+  return store;
 }
 
 export function sha256(input: string | Buffer): string {

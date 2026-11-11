@@ -35,24 +35,7 @@ export function hasPermission(role: Role, permission: Permission): boolean {
   return rolePermissions(role).includes(permission);
 }
 
-export function resolveRole(input: {
-  email: string;
-  claimOperator?: boolean;
-  storedRole?: Role;
-  operatorEmails: Set<string>;
-}): Role {
-  const email = input.email.trim().toLowerCase();
-  if (input.storedRole === "operator") return "operator";
-  if (input.claimOperator) return "operator";
-  if (email && input.operatorEmails.has(email)) return "operator";
-  return "resident";
-}
-
-export function parseOperatorEmails(raw: string | undefined): Set<string> {
-  return new Set(
-    (raw ?? "")
-      .split(",")
-      .map((e) => e.trim().toLowerCase())
-      .filter(Boolean),
-  );
+/** Operator is a flag on the stored account. Nothing in the environment grants it. */
+export function resolveRole(input: { storedRole?: Role }): Role {
+  return input.storedRole === "operator" ? "operator" : "resident";
 }

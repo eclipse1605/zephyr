@@ -84,7 +84,7 @@ function raiseOneBand(aqi: number, scale: "india" | "us"): number {
   const band = scale === "us"
     ? aqi <= 50 ? 0 : aqi <= 100 ? 1 : aqi <= 150 ? 2 : aqi <= 200 ? 3 : aqi <= 300 ? 4 : 5
     : aqi <= 50 ? 0 : aqi <= 100 ? 1 : aqi <= 200 ? 2 : aqi <= 300 ? 3 : aqi <= 400 ? 4 : 5;
-  if (band >= BANDS.length - 1) return Math.min(500, Math.round(aqi));
+  if (band >= BANDS.length - 1) return Math.round(aqi);
   return Math.max(Math.round(aqi), floors[band + 1] ?? 500);
 }
 

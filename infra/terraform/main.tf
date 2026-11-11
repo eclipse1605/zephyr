@@ -5,6 +5,7 @@ locals {
     "sqladmin.googleapis.com",
     "identitytoolkit.googleapis.com",
     "bigquery.googleapis.com",
+    "earthengine.googleapis.com",
     "storage.googleapis.com",
     "cloudscheduler.googleapis.com",
     "cloudtasks.googleapis.com",
@@ -15,6 +16,22 @@ locals {
     "logging.googleapis.com",
     "monitoring.googleapis.com",
   ]
+
+  # Names the API and worker actually read. Versions are created empty;
+  # add the real value with `gcloud secrets versions add` after apply.
+  app_secrets = toset([
+    "OPENAQ_API_KEY",
+    "OPENAQ_API_KEYS",
+    "WAQI_API_TOKEN",
+    "CPCB_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_AIR_QUALITY_API_KEY",
+    "GOOGLE_PLACES_API_KEY",
+    "TWILIO_ACCOUNT_SID",
+    "TWILIO_AUTH_TOKEN",
+    "TWILIO_WHATSAPP_FROM",
+    "WHATSAPP_CLOSURE_SECRET",
+  ])
 }
 
 data "google_project" "current" {
@@ -136,6 +153,12 @@ resource "google_identity_platform_config" "auth" {
       password_required = true
     }
   }
+  authorized_domains = distinct(compact([
+    "localhost",
+    "${var.project_id}.firebaseapp.com",
+    "${var.project_id}.web.app",
+    var.lb_domain,
+  ]))
   depends_on = [google_project_service.apis]
 }
 
@@ -273,10 +296,6 @@ resource "google_cloud_run_v2_service" "api" {
         mount_path = "/cloudsql"
       }
       env {
-        name  = "ZEPHYR_STORE"
-        value = "postgres"
-      }
-      env {
         name = "DATABASE_URL"
         value_source {
           secret_key_ref {
@@ -298,10 +317,6 @@ resource "google_cloud_run_v2_service" "api" {
         value = google_pubsub_topic.report_events.name
       }
       env {
-        name  = "OPERATOR_EMAILS"
-        value = var.operator_emails
-      }
-      env {
         name  = "ZEPHYR_DEV_AUTH"
         value = "0"
       }
@@ -309,12 +324,26 @@ resource "google_cloud_run_v2_service" "api" {
         name  = "WORKER_URL"
         value = google_cloud_run_v2_service.worker.uri
       }
+      dynamic "env" {
+        for_each = local.app_secrets
+        content {
+          name = env.value
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.keys[env.value].secret_id
+              version = "latest"
+            }
+          }
+        }
+      }
     }
   }
 
   depends_on = [
     google_project_service.apis,
     google_secret_manager_secret_iam_member.api_database,
+    google_secret_manager_secret_iam_member.api_secrets,
+    google_secret_manager_secret_version.keys,
     google_sql_database.zephyr,
     google_sql_user.zephyr,
   ]
@@ -323,7 +352,9 @@ resource "google_cloud_run_v2_service" "api" {
 resource "google_cloud_run_v2_service" "worker" {
   name     = "${var.name_prefix}-worker"
   location = var.region
-  ingress  = "INGRESS_TRAFFIC_INTERNAL_ONLY"
+  # Scheduler and Pub/Sub push come from Google's public edge, not the VPC.
+  # Ingress stays public; only the invoker IAM bindings below can call it.
+  ingress = "INGRESS_TRAFFIC_ALL"
 
   template {
     service_account = google_service_account.worker.email
@@ -343,10 +374,6 @@ resource "google_cloud_run_v2_service" "worker" {
       volume_mounts {
         name       = "cloudsql"
         mount_path = "/cloudsql"
-      }
-      env {
-        name  = "ZEPHYR_STORE"
-        value = "postgres"
       }
       env {
         name = "DATABASE_URL"
@@ -374,8 +401,24 @@ resource "google_cloud_run_v2_service" "worker" {
         value = google_pubsub_topic.report_events.name
       }
       env {
-        name  = "ZEPHYR_BQ_DATASET"
-        value = google_bigquery_dataset.air.dataset_id
+        name  = "BIGQUERY_PROJECT_ID"
+        value = var.project_id
+      }
+      env {
+        name  = "EARTH_ENGINE_PROJECT_ID"
+        value = var.project_id
+      }
+      dynamic "env" {
+        for_each = local.app_secrets
+        content {
+          name = env.value
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.keys[env.value].secret_id
+              version = "latest"
+            }
+          }
+        }
       }
     }
   }
@@ -383,6 +426,8 @@ resource "google_cloud_run_v2_service" "worker" {
   depends_on = [
     google_project_service.apis,
     google_secret_manager_secret_iam_member.worker_database,
+    google_secret_manager_secret_iam_member.worker_secrets,
+    google_secret_manager_secret_version.keys,
     google_sql_database.zephyr,
     google_sql_user.zephyr,
   ]
@@ -429,6 +474,7 @@ resource "google_pubsub_subscription" "report_events_push" {
     push_endpoint = "${google_cloud_run_v2_service.worker.uri}/internal/pubsub/reports"
     oidc_token {
       service_account_email = google_service_account.pubsub_push.email
+      audience              = google_cloud_run_v2_service.worker.uri
     }
   }
 
@@ -442,7 +488,10 @@ resource "google_pubsub_subscription" "report_events_push" {
     maximum_backoff = "600s"
   }
 
-  depends_on = [google_pubsub_topic_iam_member.dlq_publisher]
+  depends_on = [
+    google_pubsub_topic_iam_member.dlq_publisher,
+    google_service_account_iam_member.pubsub_token,
+  ]
 }
 
 resource "google_pubsub_subscription" "dlq_record" {
@@ -452,6 +501,7 @@ resource "google_pubsub_subscription" "dlq_record" {
     push_endpoint = "${google_cloud_run_v2_service.worker.uri}/internal/pubsub/dlq"
     oidc_token {
       service_account_email = google_service_account.pubsub_push.email
+      audience              = google_cloud_run_v2_service.worker.uri
     }
   }
 }
@@ -477,7 +527,7 @@ resource "google_cloud_scheduler_job" "tick" {
     }
   }
 
-  depends_on = [google_project_service.apis]
+  depends_on = [google_project_service.apis, google_service_account_iam_member.scheduler_token]
 }
 
 resource "google_cloud_scheduler_job" "catalog" {
@@ -495,7 +545,7 @@ resource "google_cloud_scheduler_job" "catalog" {
     }
   }
 
-  depends_on = [google_project_service.apis]
+  depends_on = [google_project_service.apis, google_service_account_iam_member.scheduler_token]
 }
 
 resource "google_cloud_scheduler_job" "wind" {
@@ -513,7 +563,7 @@ resource "google_cloud_scheduler_job" "wind" {
     }
   }
 
-  depends_on = [google_project_service.apis]
+  depends_on = [google_project_service.apis, google_service_account_iam_member.scheduler_token]
 }
 
 resource "google_cloud_scheduler_job" "jobs_run" {
@@ -531,28 +581,27 @@ resource "google_cloud_scheduler_job" "jobs_run" {
     }
   }
 
-  depends_on = [google_project_service.apis]
+  depends_on = [google_project_service.apis, google_service_account_iam_member.scheduler_token]
 }
 
 resource "google_secret_manager_secret" "keys" {
-  for_each = toset([
-    "OPENAQ_API_KEY",
-    "WAQI_API_TOKEN",
-    "CPCB_API_KEY",
-    "GEMINI_API_KEY",
-    "GOOGLE_AIR_QUALITY_API_KEY",
-    "GOOGLE_PLACES_API_KEY",
-    "GOOGLE_SPEECH_API_KEY",
-    "TWILIO_ACCOUNT_SID",
-    "TWILIO_AUTH_TOKEN",
-    "TWILIO_WHATSAPP_FROM",
-    "WHATSAPP_CLOSURE_SECRET",
-  ])
+  for_each  = local.app_secrets
   secret_id = each.value
   replication {
     auto {}
   }
   depends_on = [google_project_service.apis]
+}
+
+# A version must exist before Cloud Run can mount "latest". The value is a
+# blank; replace it outside Terraform so later applies do not wipe the key.
+resource "google_secret_manager_secret_version" "keys" {
+  for_each    = google_secret_manager_secret.keys
+  secret      = each.value.id
+  secret_data = " "
+  lifecycle {
+    ignore_changes = [secret_data]
+  }
 }
 
 # IAM — API
@@ -608,6 +657,12 @@ resource "google_project_iam_member" "worker_bq_job" {
   member  = "serviceAccount:${google_service_account.worker.email}"
 }
 
+resource "google_project_iam_member" "worker_earthengine" {
+  project = var.project_id
+  role    = "roles/earthengine.writer"
+  member  = "serviceAccount:${google_service_account.worker.email}"
+}
+
 resource "google_storage_bucket_iam_member" "worker_objects" {
   bucket = google_storage_bucket.data.name
   role   = "roles/storage.objectAdmin"
@@ -637,6 +692,26 @@ resource "google_secret_manager_secret_iam_member" "worker_database" {
   secret_id = google_secret_manager_secret.database_url.secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.worker.email}"
+}
+
+resource "google_project_service_identity" "scheduler" {
+  provider   = google-beta
+  project    = var.project_id
+  service    = "cloudscheduler.googleapis.com"
+  depends_on = [google_project_service.apis]
+}
+
+# Scheduler and Pub/Sub mint the OIDC tokens they send to Cloud Run.
+resource "google_service_account_iam_member" "scheduler_token" {
+  service_account_id = google_service_account.scheduler.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${google_project_service_identity.scheduler.email}"
+}
+
+resource "google_service_account_iam_member" "pubsub_token" {
+  service_account_id = google_service_account.pubsub_push.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${google_project_service_identity.pubsub.email}"
 }
 
 resource "google_pubsub_topic_iam_member" "dlq_publisher" {

@@ -5,6 +5,8 @@ services:
       POSTGRES_USER: zephyr
       POSTGRES_PASSWORD: zephyr
       POSTGRES_DB: zephyr
+    volumes:
+      - pg-data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
     healthcheck:
@@ -22,11 +24,38 @@ services:
       - ./infra/firebase:/firebase
 
   minio:
-    image: adobe/s3mock:latest
+    image: cgr.dev/chainguard/minio:latest
+    # Entrypoint is already /usr/bin/minio. The image has no shell and no curl.
+    command: ["server", "/data", "--console-address", ":9001"]
     environment:
-      initialBuckets: zephyr-photos
+      MINIO_ROOT_USER: zephyr
+      MINIO_ROOT_PASSWORD: zephyr-local-secret
     ports:
-      - "9000:9090"
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      # Confirms the server process is the one that stayed up. Readiness of the
+      # API port is the minio-init client below.
+      test: ["CMD", "/usr/bin/minio", "--version"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  # One-shot. restart must stay "no": Compose rejects any other policy on a
+  # service that other services wait for with service_completed_successfully.
+  minio-init:
+    image: cgr.dev/chainguard/minio-client:latest
+    environment:
+      MC_HOST_local: http://zephyr:zephyr-local-secret@minio:9000
+    entrypoint: ["/usr/bin/mc"]
+    command: ["mb", "--ignore-existing", "local/zephyr"]
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: "no"
 
   api:
     build:
@@ -41,18 +70,16 @@ services:
         required: false
     environment:
       PORT: "8080"
-      ZEPHYR_STORE: postgres
       DATABASE_URL: postgres://zephyr:zephyr@postgres:5432/zephyr
       S3_ENDPOINT: minio
-      S3_PORT: "9090"
+      S3_PORT: "9000"
       S3_ACCESS_KEY: zephyr
-      S3_SECRET_KEY: zephyr-secret
-      S3_BUCKET: zephyr-photos
+      S3_SECRET_KEY: zephyr-local-secret
+      S3_BUCKET: zephyr
       FIREBASE_AUTH_EMULATOR_HOST: auth:9099
       AUTH_EMULATOR_PUBLIC_HOST: 127.0.0.1:9099
       FIREBASE_PROJECT_ID: zephyr-local
       FIREBASE_API_KEY: demo-key
-      ZEPHYR_DATA_DIR: /data
       ZEPHYR_FIXTURES: /fixtures
       WORKER_URL: http://worker:8081
     volumes:
@@ -60,8 +87,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      minio:
-        condition: service_started
+      minio-init:
+        condition: service_completed_successfully
       auth:
         condition: service_started
       worker:
@@ -80,22 +107,20 @@ services:
         required: false
     environment:
       PORT: "8081"
-      ZEPHYR_STORE: postgres
       DATABASE_URL: postgres://zephyr:zephyr@postgres:5432/zephyr
       S3_ENDPOINT: minio
-      S3_PORT: "9090"
+      S3_PORT: "9000"
       S3_ACCESS_KEY: zephyr
-      S3_SECRET_KEY: zephyr-secret
-      S3_BUCKET: zephyr-photos
-      ZEPHYR_DATA_DIR: /data
+      S3_SECRET_KEY: zephyr-local-secret
+      S3_BUCKET: zephyr
       ZEPHYR_FIXTURES: /fixtures
     volumes:
       - ./fixtures:/fixtures:ro
     depends_on:
       postgres:
         condition: service_healthy
-      minio:
-        condition: service_started
+      minio-init:
+        condition: service_completed_successfully
 
   web:
     build:
@@ -106,9 +131,13 @@ services:
     depends_on:
       - api
 
-  # Pub/Sub emulator for local async (optional; file-queue works without it)
+  # Pub/Sub emulator for local async (optional)
   pubsub:
     image: gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators
     command: gcloud beta emulators pubsub start --host-port=0.0.0.0:8085
     ports:
       - "8085:8085"
+
+volumes:
+  pg-data:
+  minio-data:

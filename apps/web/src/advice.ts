@@ -127,7 +127,7 @@ function looksEnglish(value: string): boolean {
 
 export function briefForLang(lang: string, text: string): string {
   const value = text.trim();
-  if (!value) return briefFallback(lang);
+  if (!value || value.includes("{")) return briefFallback(lang);
   const script = BRIEF_SCRIPT[lang];
   if (script && !script.test(value)) return briefFallback(lang);
   if (lang === "id" && looksEnglish(value) && !ID_MARK.test(value)) return briefFallback(lang);

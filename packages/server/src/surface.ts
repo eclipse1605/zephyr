@@ -6,9 +6,7 @@ import {
   median,
   publishSurface,
 } from "@zephyr/domain";
-import type { FileStore } from "./store.js";
-
-type Db = Awaited<ReturnType<FileStore["read"]>>;
+import type { Db } from "./store.js";
 const REPORT_WINDOW_MS = 6 * 60 * 60 * 1000;
 const STATION_KM = 15;
 

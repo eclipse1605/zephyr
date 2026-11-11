@@ -1,5 +1,5 @@
 import type { AqiBand, PollutantReadings } from "./types.js";
-import { aqiBand, AQI_MAX } from "./indiaAqi.js";
+import { aqiBand } from "./indiaAqi.js";
 
 export type Breakpoint = readonly [number, number, number, number];
 
@@ -28,8 +28,8 @@ export function concentrationToUsAqi(
   table: Breakpoint[],
 ): number | null {
   if (concentration == null || !Number.isFinite(concentration) || concentration < 0) return null;
-  const row = table.find(([, , , cHigh]) => concentration <= cHigh);
-  if (!row) return AQI_MAX;
+  const row = table.find(([, , , cHigh]) => concentration <= cHigh) ?? table[table.length - 1];
+  if (!row) return null;
   const [aqiLow, aqiHigh, cLow, cHigh] = row;
   const clamped = Math.max(concentration, cLow);
   return Math.round(((clamped - cLow) / (cHigh - cLow)) * (aqiHigh - aqiLow) + aqiLow);

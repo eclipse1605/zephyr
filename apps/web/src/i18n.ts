@@ -175,6 +175,18 @@ const EN = {
   subscribedLine: "Subscribed to alerts for this area.",
   themeDark: "Dark mode",
   themeLight: "Light mode",
+  layerAqi: "US AQI",
+  layerPm25: "PM2.5",
+  windOn: "Wind on",
+  windOff: "Wind off",
+  modelWord: "Model",
+  modelSource: "Color field: Open-Meteo / CAMS model. Pins: OpenAQ & CPCB (stored); WAQI live only.",
+  pollutantPm25: "PM2.5",
+  pollutantPm10: "PM10",
+  pollutantNo2: "NO2",
+  pollutantOzone: "Ozone",
+  pollutantSo2: "SO2",
+  pollutantCo: "CO",
 } as const;
 
 type Key = keyof typeof EN;
@@ -356,6 +368,18 @@ const HI: Record<Key, string> = {
   subscribedLine: "इस इलाके के अलर्ट की सदस्यता हो गई।",
   themeDark: "डार्क मोड",
   themeLight: "लाइट मोड",
+  layerAqi: "यूएस AQI",
+  layerPm25: "PM2.5",
+  windOn: "हवा चालू",
+  windOff: "हवा बंद",
+  modelWord: "मॉडल",
+  modelSource: "रंग क्षेत्र: Open-Meteo / CAMS मॉडल। पिन: OpenAQ और CPCB (संग्रहीत); WAQI केवल लाइव।",
+  pollutantPm25: "PM2.5",
+  pollutantPm10: "PM10",
+  pollutantNo2: "NO2",
+  pollutantOzone: "ओज़ोन",
+  pollutantSo2: "SO2",
+  pollutantCo: "CO",
 };
 
 const MR: Record<Key, string> = {
@@ -535,6 +559,18 @@ const MR: Record<Key, string> = {
   subscribedLine: "या परिसराच्या सूचनांची सदस्यता झाली.",
   themeDark: "गडद मोड",
   themeLight: "प्रकाश मोड",
+  layerAqi: "यूएस AQI",
+  layerPm25: "PM2.5",
+  windOn: "वारा सुरू",
+  windOff: "वारा बंद",
+  modelWord: "मॉडेल",
+  modelSource: "रंग क्षेत्र: Open-Meteo / CAMS मॉडेल. पिन: OpenAQ आणि CPCB (साठवलेले); WAQI फक्त थेट.",
+  pollutantPm25: "PM2.5",
+  pollutantPm10: "PM10",
+  pollutantNo2: "NO2",
+  pollutantOzone: "ओझोन",
+  pollutantSo2: "SO2",
+  pollutantCo: "CO",
 };
 
 const BN: Record<Key, string> = {
@@ -714,6 +750,18 @@ const BN: Record<Key, string> = {
   subscribedLine: "এই এলাকার সতর্কতায় সাবস্ক্রাইব হয়েছে।",
   themeDark: "ডার্ক মোড",
   themeLight: "লাইট মোড",
+  layerAqi: "ইউএস AQI",
+  layerPm25: "PM2.5",
+  windOn: "বাতাস চালু",
+  windOff: "বাতাস বন্ধ",
+  modelWord: "মডেল",
+  modelSource: "রঙের ক্ষেত্র: Open-Meteo / CAMS মডেল। পিন: OpenAQ ও CPCB (সংরক্ষিত); WAQI শুধু লাইভ।",
+  pollutantPm25: "PM2.5",
+  pollutantPm10: "PM10",
+  pollutantNo2: "NO2",
+  pollutantOzone: "ওজোন",
+  pollutantSo2: "SO2",
+  pollutantCo: "CO",
 };
 
 const TA: Record<Key, string> = {
@@ -893,6 +941,18 @@ const TA: Record<Key, string> = {
   subscribedLine: "இந்த பகுதியின் எச்சரிக்கைகளுக்கு சந்தா ஆனது.",
   themeDark: "இருண்ட பயன்முறை",
   themeLight: "ஒளி பயன்முறை",
+  layerAqi: "அமெரிக்க AQI",
+  layerPm25: "PM2.5",
+  windOn: "காற்று இயக்கம்",
+  windOff: "காற்று நிறுத்தம்",
+  modelWord: "மாதிரி",
+  modelSource: "வண்ண புலம்: Open-Meteo / CAMS மாதிரி. ஊசிகள்: OpenAQ & CPCB (சேமித்தது); WAQI நேரடி மட்டும்.",
+  pollutantPm25: "PM2.5",
+  pollutantPm10: "PM10",
+  pollutantNo2: "NO2",
+  pollutantOzone: "ஓசோன்",
+  pollutantSo2: "SO2",
+  pollutantCo: "CO",
 };
 
 const KN: Record<Key, string> = {
@@ -1072,6 +1132,18 @@ const KN: Record<Key, string> = {
   subscribedLine: "ಈ ಪ್ರದೇಶದ ಎಚ್ಚರಿಕೆಗಳಿಗೆ ಚಂದಾ ಆಯಿತು.",
   themeDark: "ಡಾರ್ಕ್ ಮೋಡ್",
   themeLight: "ಲೈಟ್ ಮೋಡ್",
+  layerAqi: "ಯುಎಸ್ AQI",
+  layerPm25: "PM2.5",
+  windOn: "ಗಾಳಿ ಆನ್",
+  windOff: "ಗಾಳಿ ಆಫ್",
+  modelWord: "ಮಾದರಿ",
+  modelSource: "ಬಣ್ಣ ಕ್ಷೇತ್ರ: Open-Meteo / CAMS ಮಾದರಿ. ಪಿನ್: OpenAQ & CPCB (ಉಳಿಸಿದ); WAQI ನೇರ ಮಾತ್ರ.",
+  pollutantPm25: "PM2.5",
+  pollutantPm10: "PM10",
+  pollutantNo2: "NO2",
+  pollutantOzone: "ಓಝೋನ್",
+  pollutantSo2: "SO2",
+  pollutantCo: "CO",
 };
 
 const TE: Record<Key, string> = {
@@ -1251,6 +1323,18 @@ const TE: Record<Key, string> = {
   subscribedLine: "ఈ ప్రాంతం హెచ్చరికలకు సభ్యత్వం అయింది.",
   themeDark: "డార్క్ మోడ్",
   themeLight: "లైట్ మోడ్",
+  layerAqi: "యూఎస్ AQI",
+  layerPm25: "PM2.5",
+  windOn: "గాలి ఆన్",
+  windOff: "గాలి ఆఫ్",
+  modelWord: "నమూనా",
+  modelSource: "రంగు క్షేత్రం: Open-Meteo / CAMS నమూనా. పిన్నులు: OpenAQ & CPCB (నిల్వ); WAQI ప్రత్యక్షం మాత్రమే.",
+  pollutantPm25: "PM2.5",
+  pollutantPm10: "PM10",
+  pollutantNo2: "NO2",
+  pollutantOzone: "ఓజోన్",
+  pollutantSo2: "SO2",
+  pollutantCo: "CO",
 };
 
 const ZH: Record<Key, string> = {
@@ -1430,6 +1514,18 @@ const ZH: Record<Key, string> = {
   subscribedLine: "已订阅此区域的警报。",
   themeDark: "深色模式",
   themeLight: "浅色模式",
+  layerAqi: "美国 AQI",
+  layerPm25: "PM2.5",
+  windOn: "风场开",
+  windOff: "风场关",
+  modelWord: "模式",
+  modelSource: "色场：Open-Meteo / CAMS 模式。标记：OpenAQ 与 CPCB（已存储）；WAQI 仅实时。",
+  pollutantPm25: "PM2.5",
+  pollutantPm10: "PM10",
+  pollutantNo2: "NO2",
+  pollutantOzone: "臭氧",
+  pollutantSo2: "SO2",
+  pollutantCo: "CO",
 };
 
 const RU: Record<Key, string> = {
@@ -1609,6 +1705,18 @@ const RU: Record<Key, string> = {
   subscribedLine: "Подписка на оповещения для этого района оформлена.",
   themeDark: "Тёмная тема",
   themeLight: "Светлая тема",
+  layerAqi: "AQI США",
+  layerPm25: "PM2.5",
+  windOn: "Ветер вкл",
+  windOff: "Ветер выкл",
+  modelWord: "Модель",
+  modelSource: "Цветовое поле: модель Open-Meteo / CAMS. Метки: OpenAQ и CPCB (сохранённые); WAQI только вживую.",
+  pollutantPm25: "PM2.5",
+  pollutantPm10: "PM10",
+  pollutantNo2: "NO2",
+  pollutantOzone: "Озон",
+  pollutantSo2: "SO2",
+  pollutantCo: "CO",
 };
 
 const AR: Record<Key, string> = {
@@ -1788,6 +1896,18 @@ const AR: Record<Key, string> = {
   subscribedLine: "تم الاشتراك في تنبيهات هذه المنطقة.",
   themeDark: "الوضع الداكن",
   themeLight: "الوضع الفاتح",
+  layerAqi: "مؤشر أمريكي",
+  layerPm25: "PM2.5",
+  windOn: "الرياح تعمل",
+  windOff: "الرياح متوقفة",
+  modelWord: "نموذج",
+  modelSource: "حقل اللون: نموذج Open-Meteo / CAMS. الدبابيس: OpenAQ وCPCB (مخزّنة)؛ WAQI مباشر فقط.",
+  pollutantPm25: "PM2.5",
+  pollutantPm10: "PM10",
+  pollutantNo2: "NO2",
+  pollutantOzone: "أوزون",
+  pollutantSo2: "SO2",
+  pollutantCo: "CO",
 };
 
 const ID: Record<Key, string> = {
@@ -1967,6 +2087,18 @@ const ID: Record<Key, string> = {
   subscribedLine: "Berlangganan peringatan untuk area ini.",
   themeDark: "Mode gelap",
   themeLight: "Mode terang",
+  layerAqi: "AQI AS",
+  layerPm25: "PM2.5",
+  windOn: "Angin nyala",
+  windOff: "Angin mati",
+  modelWord: "Model",
+  modelSource: "Bidang warna: model Open-Meteo / CAMS. Pin: OpenAQ & CPCB (tersimpan); WAQI hanya langsung.",
+  pollutantPm25: "PM2.5",
+  pollutantPm10: "PM10",
+  pollutantNo2: "NO2",
+  pollutantOzone: "Ozon",
+  pollutantSo2: "SO2",
+  pollutantCo: "CO",
 };
 
 const PT: Record<Key, string> = {
@@ -2146,6 +2278,18 @@ const PT: Record<Key, string> = {
   subscribedLine: "Inscrito nos alertas desta área.",
   themeDark: "Modo escuro",
   themeLight: "Modo claro",
+  layerAqi: "AQI EUA",
+  layerPm25: "PM2.5",
+  windOn: "Vento ligado",
+  windOff: "Vento desligado",
+  modelWord: "Modelo",
+  modelSource: "Campo de cor: modelo Open-Meteo / CAMS. Pinos: OpenAQ e CPCB (armazenados); WAQI só ao vivo.",
+  pollutantPm25: "PM2.5",
+  pollutantPm10: "PM10",
+  pollutantNo2: "NO2",
+  pollutantOzone: "Ozônio",
+  pollutantSo2: "SO2",
+  pollutantCo: "CO",
 };
 
 const STRINGS: Record<string, Record<Key, string>> = {

@@ -20,7 +20,7 @@ import {
   type StationReading,
   type DataMode,
 } from "@zephyr/domain";
-import { FileStore, newId, type Db, type IngestJob, type StoredIncident, type StoredStation } from "./store.js";
+import { newId, type Db, type IngestJob, type Store, type StoredIncident, type StoredStation } from "./store.js";
 import { publishedCityAqi, refreshCitySurface } from "./surface.js";
 import { anomalyForPoint, fetchCityStations, fetchOsmPlaces, fetchWind, loadSatelliteContext } from "./live.js";
 import { refreshWindGrid } from "./windGrid.js";
@@ -28,9 +28,8 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 export type IngestRunOptions = {
-  store: FileStore;
+  store: Store;
   fixturesRoot: string;
-  dataDir?: string;
   now?: Date;
   workerId?: string;
   leaseMs?: number;
@@ -134,7 +133,7 @@ function nowIso(now: Date): string {
   return now.toISOString();
 }
 
-export async function enqueueIngestJobs(store: FileStore, now = new Date()): Promise<{ enqueued: number; jobIds: string[] }> {
+export async function enqueueIngestJobs(store: Store, now = new Date()): Promise<{ enqueued: number; jobIds: string[] }> {
   const db = await store.read();
   const jobIds: string[] = [];
   const stamp = nowIso(now);
@@ -178,30 +177,10 @@ export async function enqueueIngestJobs(store: FileStore, now = new Date()): Pro
   return { enqueued: jobIds.length, jobIds };
 }
 
-function claimable(job: IngestJob, now: Date): boolean {
-  if (job.status === "dead" || job.status === "done") return false;
-  if (job.status === "queued") return true;
-  if (job.status === "running") {
-    if (!job.leaseUntil) return true;
-    return Date.parse(job.leaseUntil) <= now.getTime();
-  }
-  return false;
-}
-
-export async function claimNextJob(store: FileStore, opts: IngestRunOptions): Promise<IngestJob | null> {
+export async function claimNextJob(store: Store, opts: IngestRunOptions): Promise<IngestJob | null> {
   const now = opts.now ?? new Date();
   const owner = opts.workerId ?? `worker-${process.pid}`;
-  const db = await store.read();
-  const next = Object.values(db.ingestJobs)
-    .filter((job) => claimable(job, now))
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
-  if (!next) return null;
-  next.status = "running";
-  next.leaseOwner = owner;
-  next.leaseUntil = new Date(now.getTime() + leaseMs(opts)).toISOString();
-  next.updatedAt = nowIso(now);
-  await store.write(db);
-  return { ...next };
+  return store.claimNextIngestJob(owner, leaseMs(opts), now);
 }
 
 async function loadCityReadings(db: Db, cityId: string, fixturesRoot: string, mode: DataMode, now: Date): Promise<StationReading[]> {
@@ -537,9 +516,10 @@ async function runOpsJob(job: IngestJob, opts: IngestRunOptions): Promise<void> 
   db.ingestJobs[job.id] = job;
   await opts.store.write(db);
   await opts.store.deleteStalePhotos(24 * 3600_000);
+  await opts.store.purgeExpired(now);
 }
 
-async function failJob(store: FileStore, job: IngestJob, error: string, now: Date): Promise<void> {
+async function failJob(store: Store, job: IngestJob, error: string, now: Date): Promise<void> {
   const db = await store.read();
   const current = db.ingestJobs[job.id];
   if (!current) return;
@@ -573,14 +553,11 @@ export async function runClaimedJob(job: IngestJob, opts: IngestRunOptions): Pro
       return;
     }
     if (job.kind === "wind") {
-      const dataDir = opts.dataDir ?? process.env.ZEPHYR_DATA_DIR?.trim();
-      if (dataDir) {
-        await refreshWindGrid({
-          dataDir,
-          samplePath: opts.sampleWindPath ?? path.join(opts.fixturesRoot, "wind", "sample.json"),
-          fetchGrid: opts.fetchWindGrid,
-        }).catch(() => undefined);
-      }
+      await refreshWindGrid({
+        objects: opts.store.objects,
+        samplePath: opts.sampleWindPath ?? path.join(opts.fixturesRoot, "wind", "sample.json"),
+        fetchGrid: opts.fetchWindGrid,
+      }).catch(() => undefined);
       const db = await opts.store.read();
       job.status = "done";
       job.finishedAt = nowIso(now);
@@ -608,7 +585,7 @@ export async function drainIngestJobs(opts: IngestRunOptions, limit = 500): Prom
   return { ran };
 }
 
-export async function replayIngestJob(store: FileStore, jobId: string, now = new Date()): Promise<boolean> {
+export async function replayIngestJob(store: Store, jobId: string, now = new Date()): Promise<boolean> {
   const db = await store.read();
   const job = db.ingestJobs[jobId];
   if (!job) return false;

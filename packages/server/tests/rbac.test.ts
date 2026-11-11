@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { hasPermission, parseOperatorEmails, resolveRole, rolePermissions } from "../src/rbac.js";
+import { hasPermission, resolveRole, rolePermissions } from "../src/rbac.js";
 
 describe("rbac", () => {
   test("resident permissions are the me/report set", () => {
@@ -15,18 +15,9 @@ describe("rbac", () => {
     expect(perms).toContain("api_keys.create");
   });
 
-  test("resolveRole prefers stored operator, then claim, then allowlist", () => {
-    const emails = new Set(["op@zephyr.local"]);
-    expect(resolveRole({ email: "a@x.com", storedRole: "operator", operatorEmails: emails })).toBe("operator");
-    expect(resolveRole({ email: "a@x.com", claimOperator: true, operatorEmails: emails })).toBe("operator");
-    expect(resolveRole({ email: "op@zephyr.local", operatorEmails: emails })).toBe("operator");
-    expect(resolveRole({ email: "a@x.com", operatorEmails: emails })).toBe("resident");
-  });
-
-  test("parseOperatorEmails trims and lowercases", () => {
-    expect([...parseOperatorEmails(" Op@Zephyr.local , other@x.com ")].sort()).toEqual([
-      "op@zephyr.local",
-      "other@x.com",
-    ]);
+  test("resolveRole is only the stored account flag", () => {
+    expect(resolveRole({ storedRole: "operator" })).toBe("operator");
+    expect(resolveRole({ storedRole: "resident" })).toBe("resident");
+    expect(resolveRole({})).toBe("resident");
   });
 });

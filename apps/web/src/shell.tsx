@@ -1,5 +1,6 @@
-import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { useContext, useEffect, useState, type ReactNode } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
+import { toast } from "sonner";
 import { rememberTrack, savedTracks, trackHeading } from "./advice";
 import { LANGUAGES, t } from "./i18n";
 import { LangContext } from "./lang";
@@ -8,6 +9,7 @@ import { Logo } from "./logo";
 import { formatWhen } from "./uiBits";
 import type { Auth, City } from "./api";
 import { AuthPanel } from "./authPanel";
+import { Menu } from "./menu";
 import "./shell.css";
 
 const NAV_OPEN: Record<string, string> = {
@@ -31,6 +33,26 @@ const OP_OPEN: Record<string, string> = {
   ar: "افتح دخول المشغّل",
   id: "Buka masuk operator",
   pt: "Abrir entrada do operador",
+};
+
+const SIGN_IN: Record<string, string> = {
+  en: "Sign in", hi: "साइन इन", mr: "साइन इन", bn: "সাইন ইন", ta: "உள்நுழை", kn: "ಸೈನ್ ಇನ್", te: "సైన్ ఇన్", zh: "登录", ru: "Войти", ar: "دخول", id: "Masuk", pt: "Entrar",
+};
+
+const SIGNED_IN: Record<string, string> = {
+  en: "Signed in", hi: "साइन इन हो गया", mr: "साइन इन झाले", bn: "সাইন ইন হয়েছে", ta: "உள்நுழைந்தது", kn: "ಸೈನ್ ಇನ್ ಆಯಿತು", te: "సైన్ ఇన్ అయింది", zh: "已登录", ru: "Вход выполнен", ar: "تم الدخول", id: "Berhasil masuk", pt: "Sessão iniciada",
+};
+
+const SIGNED_OUT: Record<string, string> = {
+  en: "Signed out", hi: "साइन आउट हो गया", mr: "साइन आउट झाले", bn: "সাইন আউট হয়েছে", ta: "வெளியேறியது", kn: "ಸೈನ್ ಔಟ್ ಆಯಿತು", te: "సైన్ అవుట్ అయింది", zh: "已退出", ru: "Выход выполнен", ar: "تم الخروج", id: "Berhasil keluar", pt: "Sessão terminada",
+};
+
+const COLLAPSE: Record<string, string> = {
+  en: "Collapse sidebar", hi: "साइडबार समेटें", mr: "साइडबार बंद करा", bn: "সাইডবার গুটিয়ে নিন", ta: "பக்கப்பட்டியைச் சுருக்கு", kn: "ಪಟ್ಟಿ ಮುಚ್ಚಿ", te: "సైడ్‌బార్ మూసివేయండి", zh: "收起侧栏", ru: "Свернуть панель", ar: "اطوِ الشريط", id: "Ciutkan bilah", pt: "Recolher barra",
+};
+
+const EXPAND: Record<string, string> = {
+  en: "Expand sidebar", hi: "साइडबार खोलें", mr: "साइडबार उघडा", bn: "সাইডবার খুলুন", ta: "பக்கப்பட்டியை விரி", kn: "ಪಟ್ಟಿ ತೆರೆಯಿರಿ", te: "సైడ్‌బార్ తెరవండి", zh: "展开侧栏", ru: "Развернуть панель", ar: "وسّع الشريط", id: "Lebarkan bilah", pt: "Expandir barra",
 };
 
 function navToggleLabel(lang: string, open: boolean): string {
@@ -102,77 +124,6 @@ function ThemeToggle({ lang }: { lang: string }) {
   );
 }
 
-function LangMenu({ lang, setLang }: { lang: string; setLang: (id: string) => void }) {
-  const [open, setOpen] = useState(false);
-  const [place, setPlace] = useState<{ top?: number; bottom?: number; left: number; width: number } | null>(null);
-  const root = useRef<HTMLDivElement>(null);
-  const current = LANGUAGES.find((language) => language.id === lang);
-
-  useEffect(() => {
-    if (!open) return;
-    const onPointer = (event: PointerEvent) => {
-      if (!root.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("pointerdown", onPointer);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("pointerdown", onPointer);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-
-  return (
-    <div className="lang-menu" ref={root}>
-      <button
-        type="button"
-        className="lang-select"
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-label={t(lang, "language")}
-        title={current?.label}
-        onClick={() => {
-          const button = root.current?.querySelector("button")?.getBoundingClientRect();
-          const foot = root.current?.closest(".sidebar-foot")?.getBoundingClientRect();
-          if (button && foot) {
-            const below = window.innerHeight - button.bottom;
-            const up = below < 240 && button.top > below;
-            setPlace(up
-              ? { bottom: window.innerHeight - button.top + 6, left: foot.left, width: foot.width }
-              : { top: button.bottom + 6, left: foot.left, width: foot.width });
-          }
-          setOpen((value) => !value);
-        }}
-      >
-        {current?.short ?? lang.toUpperCase()}
-      </button>
-      {open ? (
-        <ul className="lang-list" role="listbox" aria-label={t(lang, "language")} style={place ?? undefined}>
-          {LANGUAGES.map((language) => (
-            <li key={language.id} role="presentation">
-              <button
-                type="button"
-                role="option"
-                aria-selected={language.id === lang}
-                className={language.id === lang ? "is-current" : undefined}
-                onClick={() => {
-                  setLang(language.id);
-                  setOpen(false);
-                }}
-              >
-                <span className="lang-short">{language.short}</span>
-                <span>{language.label}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-    </div>
-  );
-}
-
 export function Shell({
   cities,
   cityId,
@@ -210,6 +161,8 @@ export function Shell({
   const { pathname } = useLocation();
   const [open, setOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem("zephyr.nav") === "collapsed");
+  const [authOpen, setAuthOpen] = useState(false);
   void authEmulator;
 
   useEffect(() => {
@@ -224,6 +177,27 @@ export function Shell({
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [navOpen]);
+
+  useEffect(() => {
+    const ask = () => setAuthOpen(true);
+    window.addEventListener("zephyr-signin", ask);
+    return () => window.removeEventListener("zephyr-signin", ask);
+  }, []);
+
+  useEffect(() => {
+    if (auth) setAuthOpen(false);
+  }, [auth]);
+
+  useEffect(() => {
+    if (!authOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setAuthOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    const field = document.querySelector<HTMLInputElement>(".auth-card input");
+    field?.focus();
+    return () => document.removeEventListener("keydown", onKey);
+  }, [authOpen]);
 
   const trackPath = pathname.startsWith("/track/") ? decodeURIComponent(pathname.slice("/track/".length)) : "";
   const [tracks, setTracks] = useState(() => savedTracks());
@@ -246,7 +220,7 @@ export function Shell({
   }, [lang, pathname, trackPath]);
 
   return (
-    <div className={navOpen ? "shell is-nav-open" : "shell"} lang={lang} dir={lang === "ar" ? "rtl" : "ltr"}>
+    <div className={["shell", navOpen ? "is-nav-open" : "", collapsed ? "is-collapsed" : ""].filter(Boolean).join(" ")} lang={lang} dir={lang === "ar" ? "rtl" : "ltr"}>
       <button
         type="button"
         className="nav-scrim"
@@ -255,19 +229,38 @@ export function Shell({
         onClick={() => setNavOpen(false)}
       />
       <aside className="sidebar" id="app-sidebar">
-        <Link className="brand" to="/">
-          <Logo />
-          <span className="brand-name">Zephyr</span>
-        </Link>
+        <div className="sidebar-head">
+          <Link className="brand" to="/">
+            <Logo />
+            <span className="brand-name">Zephyr</span>
+          </Link>
+          <button
+            type="button"
+            className="collapse-toggle"
+            aria-expanded={!collapsed}
+            aria-label={(collapsed ? EXPAND : COLLAPSE)[lang] ?? (collapsed ? EXPAND.en : COLLAPSE.en)}
+            onClick={() => {
+              setCollapsed((value) => {
+                const next = !value;
+                localStorage.setItem("zephyr.nav", next ? "collapsed" : "open");
+                return next;
+              });
+            }}
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+              <path d={collapsed ? "M6 3.5 10.5 8 6 12.5" : "M10 3.5 5.5 8 10 12.5"} fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+        </div>
         <nav className="links" aria-label={t(lang, "navPrimary")}>
-          <NavLink to="/" end>
-            <span className="nav-item"><NavIcon name="home" />{t(lang, "home")}</span>
+          <NavLink to="/" end title={t(lang, "home")}>
+            <span className="nav-item"><NavIcon name="home" /><span className="nav-label">{t(lang, "home")}</span></span>
           </NavLink>
-          <NavLink to="/map">
-            <span className="nav-item"><NavIcon name="map" />{t(lang, "map")}</span>
+          <NavLink to="/map" title={t(lang, "map")}>
+            <span className="nav-item"><NavIcon name="map" /><span className="nav-label">{t(lang, "map")}</span></span>
           </NavLink>
-          <NavLink to="/report">
-            <span className="nav-item"><NavIcon name="report" />{t(lang, "report")}</span>
+          <NavLink to="/report" title={t(lang, "report")}>
+            <span className="nav-item"><NavIcon name="report" /><span className="nav-label">{t(lang, "report")}</span></span>
           </NavLink>
           {tracks.map((item, index) => (
             <NavLink className="nav-track" key={item.id} to={`/track/${item.id}`}>
@@ -275,79 +268,98 @@ export function Shell({
               <small>{[cities.find((city) => city.id === item.city)?.name ?? item.city, item.hazard ? t(lang, item.hazard) : "", item.at ? formatWhen(item.at, lang) : "", item.id.slice(0, 8)].filter(Boolean).join(" · ")}</small>
             </NavLink>
           ))}
-          <NavLink to="/diary">
-            <span className="nav-item"><NavIcon name="diary" />{t(lang, "diary")}</span>
+          <NavLink to="/diary" title={t(lang, "diary")}>
+            <span className="nav-item"><NavIcon name="diary" /><span className="nav-label">{t(lang, "diary")}</span></span>
           </NavLink>
           {confirmedOperator ? (
             <>
-              <NavLink to="/operator">
-                <span className="nav-item"><NavIcon name="operator" />{t(lang, "operator")}</span>
+              <NavLink to="/operator" title={t(lang, "operator")}>
+                <span className="nav-item"><NavIcon name="operator" /><span className="nav-label">{t(lang, "operator")}</span></span>
               </NavLink>
-              <NavLink to="/pipeline">
-                <span className="nav-item"><NavIcon name="pipeline" />{t(lang, "pipeline")}</span>
+              <NavLink to="/pipeline" title={t(lang, "pipeline")}>
+                <span className="nav-item"><NavIcon name="pipeline" /><span className="nav-label">{t(lang, "pipeline")}</span></span>
               </NavLink>
             </>
           ) : null}
         </nav>
         <div className="sidebar-foot">
-          <label className="inline city-field">
-            <span>{t(lang, "city")}</span>
-            <select aria-label={t(lang, "city")} value={cityId} onChange={(e) => setCityId(e.target.value)}>
-              {cities.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          <div className="city-field">
+            <Menu
+              label={t(lang, "city")}
+              value={cityId}
+              options={cities.map((city) => ({
+                id: city.id,
+                label: city.name,
+                short: city.name.split(/\s+/).map((word) => word[0] ?? "").join("").slice(0, 2).toUpperCase(),
+              }))}
+              onChange={setCityId}
+            />
+          </div>
           <div className="sidebar-tools">
-            <LangMenu lang={lang} setLang={setLang} />
+            <Menu
+              label={t(lang, "language")}
+              value={lang}
+              options={LANGUAGES.map((language) => ({ id: language.id, label: language.label, short: language.short }))}
+              onChange={setLang}
+            />
             <ThemeToggle lang={lang} />
           </div>
           {auth ? (
             <div className="account">
               <span className="muted" title={auth.email}>{auth.email}</span>
-              <button type="button" className="quiet" onClick={logout}>
-                {t(lang, "signOut")}
+              <button type="button" className="quiet" onClick={() => { logout(); toast(SIGNED_OUT[lang] ?? SIGNED_OUT.en); }} title={t(lang, "signOut")}>
+                <span className="nav-mark" aria-hidden="true">{auth.email.slice(0, 1).toUpperCase()}</span>
+                <span className="nav-label">{t(lang, "signOut")}</span>
               </button>
             </div>
           ) : (
-            <>
-              {devAuth && !firebaseEnabled ? (
-                <div className="account">
-                  <button type="button" className="primary" onClick={() => login("resident@zephyr.local", false)}>
-                    {t(lang, "resident")}
-                  </button>
-                  <button type="button" className="quiet" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
-                    {OP_OPEN[lang] ?? OP_OPEN.en}
-                  </button>
-                </div>
-              ) : null}
-              {(firebaseEnabled || (devAuth && open)) ? (
-                <AuthPanel
-                  lang={lang}
-                  firebaseEnabled={firebaseEnabled}
-                  googleSignIn={googleSignIn}
-                  devAuth={devAuth}
-                  showDevOperator={open}
-                  onDevLogin={(email, asOperator) => {
-                    login(email, asOperator);
-                    setOpen(false);
-                  }}
-                  onFirebaseEmail={async (email, password) => {
-                    const session = await signInEmail(email, password);
-                    loginToken(session.email, session.idToken);
-                  }}
-                  onFirebaseGoogle={async () => {
-                    const session = await signInGoogle();
-                    loginToken(session.email, session.idToken);
-                  }}
-                />
-              ) : null}
-            </>
+            <button type="button" className="primary sign-in-open" onClick={() => setAuthOpen(true)}>
+              <NavIcon name="operator" />
+              <span className="nav-label">{SIGN_IN[lang] ?? SIGN_IN.en}</span>
+            </button>
           )}
         </div>
       </aside>
+      {authOpen ? (
+        <div className="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-title">
+          <button type="button" className="auth-scrim" aria-label={NAV_CLOSE[lang] ?? NAV_CLOSE.en} onClick={() => setAuthOpen(false)} />
+          <div className="auth-card">
+            <div className="auth-card-head">
+              <h2 id="auth-title">{SIGN_IN[lang] ?? SIGN_IN.en}</h2>
+              <button type="button" className="quiet" aria-label={NAV_CLOSE[lang] ?? NAV_CLOSE.en} onClick={() => setAuthOpen(false)}>
+                ×
+              </button>
+            </div>
+            {devAuth && !firebaseEnabled ? (
+              <button type="button" className="quiet" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+                {OP_OPEN[lang] ?? OP_OPEN.en}
+              </button>
+            ) : null}
+            <AuthPanel
+              lang={lang}
+              firebaseEnabled={firebaseEnabled}
+              googleSignIn={googleSignIn}
+              devAuth={devAuth}
+              showDevOperator={open}
+              onDevLogin={(email, asOperator) => {
+                login(email, asOperator);
+                setOpen(false);
+                toast.success(SIGNED_IN[lang] ?? SIGNED_IN.en);
+              }}
+              onFirebaseEmail={async (email, password) => {
+                const session = await signInEmail(email, password);
+                loginToken(session.email, session.idToken);
+                toast.success(SIGNED_IN[lang] ?? SIGNED_IN.en);
+              }}
+              onFirebaseGoogle={async () => {
+                const session = await signInGoogle();
+                loginToken(session.email, session.idToken);
+                toast.success(SIGNED_IN[lang] ?? SIGNED_IN.en);
+              }}
+            />
+          </div>
+        </div>
+      ) : null}
       <div className="shell-main">
         <header className="mobile-bar">
           <button

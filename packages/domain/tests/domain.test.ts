@@ -55,6 +55,26 @@ describe("india AQI", () => {
     assert.equal(aqiBand(201), "Poor");
     assert.equal(aqiBand(200), "Moderate");
   });
+
+  it("keeps climbing past the old 500 cap", () => {
+    const top = indiaAqiFromReadings({ pm25: 380 });
+    const over = indiaAqiFromReadings({ pm25: 500 });
+    assert.equal(top?.aqi, 500);
+    assert.ok(over && over.aqi > 500);
+  });
+
+  it("reads OpenAQ CO in µg/m³ instead of treating it as mg/m³", () => {
+    const r = indiaAqiFromReadings({ co: 4300, pm25: 30 });
+    assert.ok(r);
+    assert.ok(r!.aqi < 300);
+    assert.equal(r!.dominant, "CO");
+  });
+
+  it("extrapolates a real PM10 exceedance without running away", () => {
+    const r = indiaAqiFromReadings({ pm10: 833 });
+    assert.ok(r);
+    assert.ok(r!.aqi > 500 && r!.aqi < 2000);
+  });
 });
 
 describe("US AQI", () => {

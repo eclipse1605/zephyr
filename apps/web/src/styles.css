@@ -465,7 +465,73 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .shell-main { padding: 16px 16px 40px; }
 }
 
+.skeleton {
+  display: block;
+  border-radius: 10px;
+  background: linear-gradient(90deg, var(--bg-warm) 25%, color-mix(in srgb, var(--ink) 10%, var(--bg-warm)) 37%, var(--bg-warm) 63%);
+  background-size: 400% 100%;
+}
+
+.skeleton-stack { display: grid; gap: 10px; }
+.skeleton-title { width: min(220px, 60%); height: 28px; }
+.skeleton-hero { height: 168px; border-radius: 16px; }
+.skeleton-card { height: 96px; }
+.skeleton-board { height: 200px; border-radius: 16px; }
+.skeleton-line { height: 16px; width: 72%; }
+.skeleton-line.is-wide { width: 100%; height: 22px; }
+
+[data-sonner-toaster] button {
+  height: auto;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .shell { transition: grid-template-columns 200ms ease; }
+  .sidebar { transition: padding 200ms ease; }
+  button, a, .card, .hero, .stat-strip li, .pin {
+    transition: background-color 160ms ease, color 160ms ease, border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease, opacity 160ms ease;
+  }
+  button:active:not(:disabled) { transform: scale(0.98); }
+  .ward-fill { transition: width 420ms ease; }
+  .auth-scrim { animation: zephyr-fade 160ms ease; }
+  .auth-card { animation: zephyr-pop 180ms ease; }
+  .menu-pop { animation: zephyr-menu 140ms ease; }
+  .skeleton { animation: zephyr-shimmer 1.2s ease infinite; }
+  main > .stack { animation: zephyr-fade 220ms ease; }
+}
+
+@keyframes zephyr-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes zephyr-pop {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes zephyr-menu {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes zephyr-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: 0 0; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   * { scroll-behavior: auto; }
-  .mode-switch::after { transition: none; }
+  .mode-switch::after,
+  .shell,
+  .sidebar,
+  button,
+  a,
+  .card,
+  .ward-fill,
+  .skeleton { transition: none; animation: none; }
 }

@@ -1,6 +1,36 @@
-project_id      = "zephyr-512319"
-region          = "asia-south1"
-name_prefix     = "zephyr"
-operator_emails = "operator@example.com"
-api_image       = "asia-south1-docker.pkg.dev/zephyr-512319/zephyr/api:latest"
-worker_image    = "asia-south1-docker.pkg.dev/zephyr-512319/zephyr/worker:latest"
+project_id   = "zephyr-512319"
+region       = "asia-south1"
+name_prefix  = "zephyr"
+api_image    = "asia-south1-docker.pkg.dev/zephyr-512319/zephyr/api:latest"
+worker_image = "asia-south1-docker.pkg.dev/zephyr-512319/zephyr/worker:latest"
+
+# Set this before the public site can use HTTPS and Firebase Auth on that host.
+# lb_domain = "air.example.com"
+
+# After apply, put real values in Secret Manager (Terraform leaves a blank version
+# and will not overwrite later versions):
+#   gcloud secrets versions add OPENAQ_API_KEY --data-file=-
+#   gcloud secrets versions add OPENAQ_API_KEYS --data-file=-
+#   gcloud secrets versions add WAQI_API_TOKEN --data-file=-
+#   gcloud secrets versions add GEMINI_API_KEY --data-file=-
+#   gcloud secrets versions add GOOGLE_PLACES_API_KEY --data-file=-
+#   gcloud secrets versions add GOOGLE_AIR_QUALITY_API_KEY --data-file=-
+#   gcloud secrets versions add CPCB_API_KEY --data-file=-
+#   gcloud secrets versions add TWILIO_ACCOUNT_SID --data-file=-
+#   gcloud secrets versions add TWILIO_AUTH_TOKEN --data-file=-
+#   gcloud secrets versions add TWILIO_WHATSAPP_FROM --data-file=-
+#   gcloud secrets versions add WHATSAPP_CLOSURE_SECRET --data-file=-
+# Then redeploy the Cloud Run services so they pick up "latest".
+#
+# The web app is the GCS bucket from output web_bucket, behind the load balancer.
+# Firebase web config is baked in at build time and must be THIS project's
+# Identity Platform web app, not a local .env from another project:
+#   NEXT_PUBLIC_FIREBASE_API_KEY=... \
+#   NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=... \
+#   NEXT_PUBLIC_FIREBASE_PROJECT_ID=... \
+#   NEXT_PUBLIC_FIREBASE_APP_ID=... \
+#   bun run --filter @zephyr/web build
+#   gcloud storage rsync apps/web/dist gs://PROJECT-web --recursive
+#
+# Build and push api/worker from the repo root, then set api_image / worker_image
+# to that Artifact Registry path (output artifact_registry).

@@ -66,6 +66,34 @@ export function PageHead({ kicker, title, children }: { kicker: string; title: s
   );
 }
 
+export function SkeletonBlock({ className }: { className?: string }) {
+  return <span className={`skeleton${className ? ` ${className}` : ""}`} aria-hidden="true" />;
+}
+
+export function HomeSkeleton() {
+  return (
+    <div className="stack" aria-busy="true">
+      <SkeletonBlock className="skeleton-title" />
+      <SkeletonBlock className="skeleton-hero" />
+      <div className="stat-strip">
+        <SkeletonBlock className="skeleton-card" />
+        <SkeletonBlock className="skeleton-card" />
+      </div>
+      <SkeletonBlock className="skeleton-board" />
+    </div>
+  );
+}
+
+export function PanelSkeleton({ rows = 4 }: { rows?: number }) {
+  return (
+    <div className="skeleton-stack" aria-busy="true">
+      {Array.from({ length: rows }, (_, index) => (
+        <SkeletonBlock key={index} className={index === 0 ? "skeleton-line is-wide" : "skeleton-line"} />
+      ))}
+    </div>
+  );
+}
+
 export function Status({ children }: { children: ReactNode }) {
   return (
     <p className="status" role="status">

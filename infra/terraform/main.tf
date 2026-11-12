@@ -106,7 +106,8 @@ resource "google_sql_database_instance" "zephyr" {
   deletion_protection = true
 
   settings {
-    tier = var.db_tier
+    tier    = var.db_tier
+    edition = "ENTERPRISE"
     ip_configuration {
       ipv4_enabled = true
       ssl_mode     = "ENCRYPTED_ONLY"

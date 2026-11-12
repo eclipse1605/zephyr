@@ -1,0 +1,12 @@
+{
+  "buildCommand": "bun run --filter @zephyr/web build",
+  "installCommand": "bun install",
+  "outputDirectory": "apps/web/dist",
+  "framework": null,
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://zephyr-api-mjju7qezoa-el.a.run.app/api/:path*"
+    }
+  ]
+}

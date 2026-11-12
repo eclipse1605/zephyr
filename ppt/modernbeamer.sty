@@ -1,0 +1,246 @@
+% notionlight.beamertheme
+% Notion & JPMC-inspired editorial light theme
+\mode<presentation>
+
+% ------------------------------------------------------------------
+% Colors
+% ------------------------------------------------------------------
+\usepackage{xcolor}
+\definecolor{nlBg}{HTML}{FFFFFF}          % Clean white slide background
+\definecolor{nlSurface}{HTML}{F8F9FA}     % Neutral card background
+\definecolor{nlSurfaceWarm}{HTML}{F7F6F3} % Notion warm surface
+\definecolor{nlBorder}{HTML}{E2E4E8}      % Hairline card border
+\definecolor{nlText}{HTML}{1A1F2C}        % Primary ink (deep charcoal)
+\definecolor{nlMuted}{HTML}{52627A}       % Secondary / metadata text
+\definecolor{nlNavy}{HTML}{0A2540}        % Deep JPMC Navy
+\definecolor{nlNavyBg}{HTML}{EAF0F6}      % Navy tint
+\definecolor{nlPrimary}{HTML}{005EB8}     % Chase / JPMC Primary Blue
+\definecolor{nlPrimaryBg}{HTML}{EDF5FD}   % Primary blue tint
+\definecolor{nlGold}{HTML}{B8860B}        % Gold accent
+\definecolor{nlGoldBg}{HTML}{FEF9EC}      % Gold highlight tint
+
+% Material Chip Colors
+\definecolor{nlBlue}{HTML}{1868DB}
+\definecolor{nlBlueBg}{HTML}{EBF3FE}
+\definecolor{nlGreen}{HTML}{0E7A60}
+\definecolor{nlGreenBg}{HTML}{EAF7F2}
+\definecolor{nlOrange}{HTML}{C85A00}
+\definecolor{nlOrangeBg}{HTML}{FEF2E8}
+\definecolor{nlPurple}{HTML}{6B46C1}
+\definecolor{nlPurpleBg}{HTML}{F3EEFD}
+\definecolor{nlRed}{HTML}{C53030}
+\definecolor{nlRedBg}{HTML}{FDE8E8}
+
+% ------------------------------------------------------------------
+% Typography: Source Serif Pro for titles, Source Sans Pro for body
+% ------------------------------------------------------------------
+\usepackage[default]{sourcesanspro}
+\usepackage{sourceserifpro}
+\usepackage[T1]{fontenc}
+
+\newcommand{\jpmctitlefont}{\rmfamily\bfseries}
+\newcommand{\jpmcserif}{\rmfamily}
+
+% ------------------------------------------------------------------
+% Beamer Colors
+% ------------------------------------------------------------------
+\setbeamercolor{normal text}{fg=nlText,bg=nlBg}
+\setbeamercolor{alerted text}{fg=nlPrimary}
+\setbeamercolor{example text}{fg=nlGreen}
+\setbeamercolor{structure}{fg=nlText,bg=nlBg}
+\setbeamercolor{frametitle}{fg=nlNavy,bg=nlBg}
+\setbeamercolor{title}{fg=nlNavy,bg=nlBg}
+\setbeamercolor{author}{fg=nlMuted,bg=nlBg}
+\setbeamercolor{institute}{fg=nlMuted,bg=nlBg}
+\setbeamercolor{date}{fg=nlMuted,bg=nlBg}
+\setbeamercolor{page number in head/foot}{fg=nlMuted}
+
+% ------------------------------------------------------------------
+% Font Sizes: Compact & Clean Body
+% ------------------------------------------------------------------
+\setbeamerfont{frametitle}{size=\large}
+\setbeamerfont{title}{size=\huge}
+\setbeamerfont{author}{size=\small}
+\setbeamerfont{institute}{size=\scriptsize}
+
+\setbeamerfont{itemize/enumerate body}{size=\footnotesize}
+\setbeamerfont{itemize/enumerate subbody}{size=\scriptsize}
+
+\setbeamerfont{block title}{size=\footnotesize,series=\bfseries}
+\setbeamerfont{block body}{size=\footnotesize}
+
+\setbeamerfont{caption}{size=\scriptsize}
+\setbeamerfont{page number in head/foot}{size=\tiny}
+\setbeamerfont{alerted text}{series=\bfseries}
+
+% List spacing and markers
+\setbeamertemplate{enumerate item}{\insertenumlabel.}
+\setbeamertemplate{enumerate subitem}{\insertenumlabel.\insertsubenumlabel}
+\setbeamertemplate{itemize item}{\textcolor{nlPrimary}{\scriptsize$\blacksquare$}}
+\setbeamertemplate{itemize subitem}{\textcolor{nlMuted}{\tiny$\circ$}}
+
+\setlength{\leftmargini}{1.2em}
+\setlength{\leftmarginii}{1.0em}
+
+\setbeamersize{text margin left=0.65cm, text margin right=0.65cm}
+
+% ------------------------------------------------------------------
+% Clean Beamer Template: Zero out sidebar artifacts
+% ------------------------------------------------------------------
+\setbeamertemplate{headline}{}
+\setbeamertemplate{sidebar left}{}
+\setbeamertemplate{sidebar right}{}
+
+% ------------------------------------------------------------------
+% Top bar layout: frametitle integrates title text + top-right logo
+% The bottom line stops before the logo with clean padding (20-30px)
+% ------------------------------------------------------------------
+\setbeamertemplate{frametitle}{%
+  \nointerlineskip%
+  \vspace*{0.15cm}%
+  \begin{beamercolorbox}[wd=\textwidth,ht=0.85cm,dp=0.15cm]{frametitle}%
+    \begin{minipage}[b]{0.74\textwidth}%
+      {\jpmctitlefont\color{nlNavy}\fontsize{14}{17}\selectfont\insertframetitle\par}%
+      \ifx\insertframesubtitle\@empty\else%
+        \vspace{0.06em}%
+        {\color{nlMuted}\fontsize{8.5}{10.5}\selectfont\insertframesubtitle\par}%
+      \fi%
+      \vspace{0.12cm}%
+      {\color{nlPrimary!25}\hrule height 0.6pt}%
+    \end{minipage}%
+    \hfill%
+    \begin{minipage}[b]{0.23\textwidth}%
+      \raggedleft%
+      \raisebox{0.02cm}{\insertlogo}%
+    \end{minipage}%
+  \end{beamercolorbox}%
+  \vspace{0.12cm}%
+}
+
+% ------------------------------------------------------------------
+% Footline: Clean slide number bottom-right
+% ------------------------------------------------------------------
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{footline}{%
+  \ifnum\insertframenumber=1\relax
+    \vspace{0.35cm}%
+  \else
+    \begin{beamercolorbox}[wd=\paperwidth,ht=0.35cm,dp=0.12cm]{footline}%
+      \hfill%
+      {\usebeamerfont{page number in head/foot}%
+       \color{nlMuted}\insertframenumber\,/\,\inserttotalframenumber\hspace*{0.65cm}}%
+    \end{beamercolorbox}%
+  \fi
+}
+
+% ------------------------------------------------------------------
+% TColorBox Cards
+% ------------------------------------------------------------------
+\usepackage[most]{tcolorbox}
+\usepackage{tikz}
+
+\newtcolorbox{nlcard}[1][]{%
+  enhanced,
+  colback=nlSurfaceWarm,
+  colframe=nlBorder,
+  boxrule=0.6pt,
+  arc=3pt,
+  boxsep=0pt,
+  left=7pt, right=7pt, top=6pt, bottom=5pt,
+  fontupper=\footnotesize,
+  fonttitle=\bfseries\footnotesize,
+  coltitle=nlNavy,
+  title={#1},
+  attach boxed title to top left={yshift=-2mm, xshift=3mm},
+  boxed title style={%
+    colback=nlBg,
+    colframe=nlBorder,
+    boxrule=0.5pt,
+    arc=2pt,
+    left=4pt, right=4pt, top=1.5pt, bottom=1.5pt
+  },
+  top=11pt
+}
+
+\newtcolorbox{nlhighlight}[1][]{%
+  enhanced,
+  colback=nlPrimaryBg,
+  colframe=nlPrimary,
+  boxrule=0pt,
+  leftrule=3.5pt,
+  arc=2.5pt,
+  boxsep=0pt,
+  left=8pt, right=7pt, top=6pt, bottom=5pt,
+  fontupper=\footnotesize,
+  fonttitle=\bfseries\footnotesize,
+  coltitle=nlPrimary,
+  title={#1},
+  attach boxed title to top left={yshift=-2mm, xshift=2mm},
+  boxed title style={%
+    colback=nlBg,
+    colframe=nlPrimary!40,
+    boxrule=0.5pt,
+    arc=2pt,
+    left=4pt, right=4pt, top=1.5pt, bottom=1.5pt
+  },
+  top=11pt
+}
+
+\newtcolorbox{nlgoldcard}[1][]{%
+  enhanced,
+  colback=nlGoldBg,
+  colframe=nlGold,
+  boxrule=0pt,
+  leftrule=3pt,
+  arc=2.5pt,
+  boxsep=0pt,
+  left=8pt, right=7pt, top=6pt, bottom=5pt,
+  fontupper=\footnotesize,
+  fonttitle=\bfseries\footnotesize,
+  coltitle=nlGold!70!black,
+  title={#1},
+  attach boxed title to top left={yshift=-2mm, xshift=2mm},
+  boxed title style={%
+    colback=nlBg,
+    colframe=nlGold!50,
+    boxrule=0.5pt,
+    arc=2pt,
+    left=4pt, right=4pt, top=1.5pt, bottom=1.5pt
+  },
+  top=11pt
+}
+
+% ------------------------------------------------------------------
+% Material Design Pill Chips
+% ------------------------------------------------------------------
+\newcommand{\chip}[2]{%
+  \tikz[baseline=(chipbase.base)]{%
+    \node[rounded corners=2.2pt, inner xsep=4.5pt, inner ysep=1.8pt,
+          fill=#1Bg, text=#1, font=\scriptsize\bfseries]
+      (chipbase) {#2};%
+  }%
+}
+\newcommand{\chipblue}[1]{\chip{nlBlue}{#1}}
+\newcommand{\chipgreen}[1]{\chip{nlGreen}{#1}}
+\newcommand{\chiporange}[1]{\chip{nlOrange}{#1}}
+\newcommand{\chippurple}[1]{\chip{nlPurple}{#1}}
+\newcommand{\chipred}[1]{\chip{nlRed}{#1}}
+\newcommand{\chipnavy}[1]{\chip{nlNavy}{#1}}
+
+% ------------------------------------------------------------------
+% Title Page: Clean light layout, logos side by side below details
+% ------------------------------------------------------------------
+\setbeamertemplate{title page}{%
+  \vspace*{0.2cm}%
+  \begin{center}
+    {\chipnavy{Big Data Analytics}}\\[0.5em]
+    {\fontsize{24}{28}\selectfont\jpmctitlefont\color{nlNavy}\inserttitle}\\[0.25em]
+    {\color{nlPrimary}\rule{3.5cm}{1.2pt}}\\[0.8em]
+    {\small\bfseries\color{nlText}\insertauthor}\\[0.3em]
+    {\scriptsize\color{nlMuted}\insertinstitute}\\[1.4em]
+    \includegraphics[height=0.90cm,keepaspectratio]{images/clglogo-cropped.png}
+  \end{center}
+}
+
+\mode
+<all>

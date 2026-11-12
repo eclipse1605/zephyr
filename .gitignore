@@ -16,3 +16,4 @@ credentials/
 *-service-account*.json
 .scratch
 .vercel
+build/
